@@ -1,0 +1,13 @@
+# build artifacts
+/bin/
+Creds/
+
+# local runtime root (only matters if someone points --root at the repo)
+/.healthd/
+
+# editor/OS cruft
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
