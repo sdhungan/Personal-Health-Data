@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -44,14 +47,15 @@ func dayLabel(day time.Time) string {
 	}
 }
 
-func buildDashboardData(ctx context.Context, db *sql.DB, day time.Time, view string, tileKinds []string) (views.DashboardData, error) {
+func buildDashboardData(ctx context.Context, db *sql.DB, day time.Time, view string, tileKinds []string, cronometerConnected bool) (views.DashboardData, error) {
 	dayStr := day.Format(dateLayout)
 	data := views.DashboardData{
-		Day:      dayStr,
-		DayLabel: dayLabel(day),
-		PrevDay:  day.AddDate(0, 0, -1).Format(dateLayout),
-		NextDay:  day.AddDate(0, 0, 1).Format(dateLayout),
-		View:     view,
+		Day:                 dayStr,
+		DayLabel:            dayLabel(day),
+		PrevDay:             day.AddDate(0, 0, -1).Format(dateLayout),
+		NextDay:             day.AddDate(0, 0, 1).Format(dateLayout),
+		View:                view,
+		CronometerConnected: cronometerConnected,
 	}
 
 	today, err := fetchDailySummaryRow(ctx, db, dayStr)
@@ -72,6 +76,14 @@ func buildDashboardData(ctx context.Context, db *sql.DB, day time.Time, view str
 			t, err = buildBodyTile(ctx, db, t, day)
 		case kind == "hr_zones":
 			t, err = buildHeartRateZonesTile(ctx, db, t, day, t.Expanded)
+		case kind == "active_minutes_by_level":
+			t, err = buildActiveMinutesByLevelTile(ctx, db, t, day, t.Expanded)
+		case kind == "active_zone_minutes_by_zone":
+			t, err = buildActiveZoneMinutesByZoneTile(ctx, db, t, day, t.Expanded)
+		case kind == "activity_level":
+			t, err = buildActivityLevelSegmentTile(ctx, db, t, day, t.Expanded)
+		case kind == "food_log":
+			t, err = buildFoodLogTile(ctx, db, t, day, t.Expanded)
 		default:
 			if _, ok := metricDefs[kind]; !ok {
 				continue
@@ -92,7 +104,7 @@ func (s *Server) handleIndex(c echo.Context) error {
 	ctx := c.Request().Context()
 	day := parseDay(c)
 
-	data, err := buildDashboardData(ctx, s.DB, day, "data", DefaultTileKinds)
+	data, err := buildDashboardData(ctx, s.DB, day, "data", DefaultTileKinds, s.cronometerConnected())
 	if err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
@@ -126,7 +138,7 @@ func (s *Server) handleView(c echo.Context) error {
 		return sse.PatchElementTempl(views.JournalViewBody(data, j))
 	}
 
-	data, err := buildDashboardData(ctx, s.DB, day, "data", DefaultTileKinds)
+	data, err := buildDashboardData(ctx, s.DB, day, "data", DefaultTileKinds, s.cronometerConnected())
 	if err != nil {
 		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
 	}
@@ -150,6 +162,20 @@ func (s *Server) handleTile(c echo.Context) error {
 		t, err = buildActivitiesTile(ctx, s.DB, t, day, expanded)
 	case kind == "body":
 		t, err = buildBodyTile(ctx, s.DB, t, day)
+	// hr_zones was missing from this switch even before this pass (found
+	// and flagged as an out-of-scope bug earlier this session) — fixed here
+	// since active_minutes_by_level/active_zone_minutes_by_zone/
+	// activity_level need the exact same wiring added right next to it.
+	case kind == "hr_zones":
+		t, err = buildHeartRateZonesTile(ctx, s.DB, t, day, expanded)
+	case kind == "active_minutes_by_level":
+		t, err = buildActiveMinutesByLevelTile(ctx, s.DB, t, day, expanded)
+	case kind == "active_zone_minutes_by_zone":
+		t, err = buildActiveZoneMinutesByZoneTile(ctx, s.DB, t, day, expanded)
+	case kind == "activity_level":
+		t, err = buildActivityLevelSegmentTile(ctx, s.DB, t, day, expanded)
+	case kind == "food_log":
+		t, err = buildFoodLogTile(ctx, s.DB, t, day, expanded)
 	default:
 		if _, ok := metricDefs[kind]; !ok {
 			return c.String(http.StatusNotFound, "unknown tile kind")
@@ -173,11 +199,16 @@ func (s *Server) handleTile(c echo.Context) error {
 }
 
 // handleForceSync answers the dashboard's "Sync" button: an on-demand,
-// unconditional sync of one day's Google Health data — the manual
-// override to the day-completeness engine's normal pending/partial-only
-// automatic sync (internal/syncengine), useful both for filling in a day
-// the automatic pass gave up on and for testing without waiting for the
-// cron schedule.
+// unconditional sync of one day's data from every connected source
+// (Google Health always, Cronometer too once its account card shows
+// connected) — the manual override to the day-completeness engine's
+// normal pending/partial-only automatic sync (internal/syncengine), useful
+// both for filling in a day the automatic pass gave up on and for testing
+// without waiting for the cron schedule. The two sources run concurrently
+// (see runSource below) rather than one after the other, since they're
+// deliberately independent (schema.sql: "a Cronometer outage/breakage
+// never touches watch data or vice versa") and there's no reason to make
+// the button wait twice as long.
 //
 // A full day's sync takes many real API calls (heart-rate alone can be
 // thousands of samples) and can run 15-20+ seconds, so this must not hold
@@ -219,17 +250,14 @@ func (s *Server) handleForceSync(c echo.Context) error {
 		hasData bool
 		err     error
 	}
-	done := make(chan syncResult, 1)
-	go func() {
-		defer s.syncingDays.Delete(dayStr)
-		bgCtx := context.Background()
-
-		hasData, err := s.googleSync.SyncDay(bgCtx, day)
+	// runSource syncs one source's day and records the resulting
+	// sync_state status — today always stays "partial" regardless of what
+	// was found, since it's still in progress by definition and a manual
+	// sync doesn't change that (see internal/syncengine.RunDay's doc
+	// comment on why today is never auto-promoted).
+	runSource := func(bgCtx context.Context, source string, syncer syncengine.DaySyncer) syncResult {
+		hasData, err := syncer.SyncDay(bgCtx, day)
 		if err == nil {
-			// Today must stay "partial" regardless — it's still in
-			// progress by definition, and a manual sync doesn't change
-			// that (see internal/syncengine.RunDay's doc comment on why
-			// today is never auto-promoted).
 			status := syncengine.StatusComplete
 			if !hasData {
 				status = syncengine.StatusMissing
@@ -237,11 +265,44 @@ func (s *Server) handleForceSync(c echo.Context) error {
 			if dayStr == time.Now().Format(dateLayout) {
 				status = syncengine.StatusPartial
 			}
-			if serr := s.syncState.EnsurePending(bgCtx, googleHealthSource, dayStr); serr == nil {
-				_ = s.syncState.SetStatus(bgCtx, googleHealthSource, dayStr, status)
+			if serr := s.syncState.EnsurePending(bgCtx, source, dayStr); serr == nil {
+				_ = s.syncState.SetStatus(bgCtx, source, dayStr, status)
 			}
 		}
-		done <- syncResult{hasData, err}
+		return syncResult{hasData, err}
+	}
+
+	done := make(chan syncResult, 1)
+	go func() {
+		defer s.syncingDays.Delete(dayStr)
+		bgCtx := context.Background()
+
+		var wg sync.WaitGroup
+		var googleRes syncResult
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			googleRes = runSource(bgCtx, googleHealthSource, s.googleSync)
+		}()
+
+		var cronoRes syncResult
+		cronoConnected := s.cronometerSync != nil
+		if cronoConnected {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				cronoRes = runSource(bgCtx, cronometerSource, s.cronometerSync)
+			}()
+		}
+		wg.Wait()
+
+		// Cronometer failing is reported (stderr) but never blocks the
+		// button on Google Health's own result — same non-fatal posture
+		// internal/cli/sync.go already takes for the scheduled pass.
+		if cronoConnected && cronoRes.err != nil {
+			fmt.Fprintln(os.Stderr, "cronometer sync error:", cronoRes.err)
+		}
+		done <- googleRes
 	}()
 
 	select {
@@ -276,7 +337,7 @@ func (s *Server) patchCurrentView(sse *datastar.ServerSentEventGenerator, ctx co
 		return sse.PatchElementTempl(views.JournalViewBody(data, j))
 	}
 
-	data, err := buildDashboardData(ctx, s.DB, day, "data", DefaultTileKinds)
+	data, err := buildDashboardData(ctx, s.DB, day, "data", DefaultTileKinds, s.cronometerConnected())
 	if err != nil {
 		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
 	}

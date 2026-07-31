@@ -116,6 +116,21 @@ func (p *Paths) ConfigFile() string    { return filepath.Join(p.ConfigDir(), "co
 func (p *Paths) GoogleOAuthFile() string {
 	return filepath.Join(p.ConfigDir(), "google_oauth.json.enc")
 }
+
+// CronometerCredentialsFile holds the encrypted Cronometer username/password
+// (see ARCHITECTURE.md §5 — Cronometer has no OAuth, so this is the
+// long-term encrypted store the credentials live in instead of plaintext
+// config.yaml; "healthd auth cronometer" writes it).
+func (p *Paths) CronometerCredentialsFile() string {
+	return filepath.Join(p.ConfigDir(), "cronometer_credentials.json.enc")
+}
+
+// CronometerSessionFile caches the (short-lived) Cronometer session token so
+// a sync run doesn't have to log in from scratch every time — Cronometer
+// throttles repeated logins per account.
+func (p *Paths) CronometerSessionFile() string {
+	return filepath.Join(p.ConfigDir(), "cronometer_session.json.enc")
+}
 func (p *Paths) SyncLogFile() string   { return filepath.Join(p.LogsDir(), "sync.log") }
 func (p *Paths) ServerLogFile() string { return filepath.Join(p.LogsDir(), "server.log") }
 func (p *Paths) DBKeyFile() string     { return filepath.Join(p.KeysDir(), "db.key") }
@@ -210,7 +225,7 @@ func (p *Paths) ExternalOutputPath(input string) (string, error) {
 	}
 	abs = filepath.Clean(abs)
 
-	managed := []string{p.DBFile(), p.DBWorkingFile(), p.DBKeyFile(), p.GoogleOAuthFile(), p.ConfigFile()}
+	managed := []string{p.DBFile(), p.DBWorkingFile(), p.DBKeyFile(), p.GoogleOAuthFile(), p.ConfigFile(), p.CronometerCredentialsFile(), p.CronometerSessionFile()}
 	for _, m := range managed {
 		if abs == m {
 			return "", fmt.Errorf("refusing to write to managed path %q", abs)

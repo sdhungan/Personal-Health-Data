@@ -51,6 +51,9 @@ func runForeground() error {
 		if err := runGoogleHealthSyncOnce(ctx); err != nil {
 			fmt.Fprintln(os.Stderr, "google_health sync error:", err)
 		}
+		if err := runCronometerSyncOnce(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "cronometer sync error:", err)
+		}
 	}
 
 	scheduler := cron.New()

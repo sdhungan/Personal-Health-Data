@@ -3,9 +3,10 @@ package googlehealth
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/sdhungan/Personal-Health-Data/internal/healthdata"
 )
 
 const dateLayout = "2006-01-02"
@@ -17,17 +18,13 @@ const dateLayout = "2006-01-02"
 // whatever constructs them (the CLI/scheduler), not by a shared type.
 //
 // Known gaps, deliberately left for later rather than guessed at:
-//   - sleep_score, stress_management_score have no confirmed working fetch
-//     — Fitbit's proprietary sleep/stress scores don't appear anywhere in
-//     this API (floors_climbed used to be listed here too; it's synced now,
-//     via the floors interval list() endpoint rather than its undocumented
-//     dailyRollUp shape).
+//   - sleep_score, stress_management_score were dropped from the schema
+//     entirely (see internal/db/schema.sql) — Fitbit's proprietary
+//     sleep/stress scores don't appear anywhere in this API, so the
+//     columns could never be populated.
 //   - swim-lengths-data (see datatypes.go) is listed for DumpToday to
 //     capture but not synced — its field shape has never been confirmed
 //     against a real response.
-//   - Cronometer sync (cronometer_daily_nutrition.kcal_burned_cronometer
-//     and friends) doesn't exist in this package at all yet — see
-//     internal/cli/sync.go's "TODO: run the Cronometer sync pass too."
 type DBSyncer struct {
 	Client *Client
 	DB     *sql.DB
@@ -36,7 +33,11 @@ type DBSyncer struct {
 // SyncDay fetches and upserts every data type healthd currently maps for
 // the calendar day day represents (its own Year/Month/Day, interpreted in
 // its own Location — see dayBounds), and reports whether any data was
-// found at all.
+// found at all. Every sync step that contributes to watch_daily_summary
+// folds its result into one healthdata.DailySummary, upserted exactly once
+// at the end — see fetchDailySummary's doc comment for which steps those
+// are and why (Timeline types compute their daily stats from the same
+// fetch that populates their sample table, not a second API call).
 func (s *DBSyncer) SyncDay(ctx context.Context, day time.Time) (bool, error) {
 	dayStr := dayKey(day)
 	hasData := false
@@ -46,7 +47,48 @@ func (s *DBSyncer) SyncDay(ctx context.Context, day time.Time) (bool, error) {
 		return false, fmt.Errorf("fetching daily summary for %s: %w", dayStr, err)
 	}
 	hasData = hasData || summaryHasData
-	if err := s.upsertDailySummary(ctx, dayStr, summary); err != nil {
+
+	activeMinutesFound, total, err := s.syncActiveMinutesByLevel(ctx, day)
+	if err != nil {
+		return false, fmt.Errorf("syncing active minutes by level for %s: %w", dayStr, err)
+	}
+	hasData = hasData || activeMinutesFound
+	summary.ActiveMinutesTotal = total
+
+	azmFound, err := s.syncActiveZoneMinutesByZone(ctx, day)
+	if err != nil {
+		return false, fmt.Errorf("syncing active zone minutes by zone for %s: %w", dayStr, err)
+	}
+	hasData = hasData || azmFound
+
+	activityLevelFound, err := s.syncActivityLevelSegments(ctx, day)
+	if err != nil {
+		return false, fmt.Errorf("syncing activity level segments for %s: %w", dayStr, err)
+	}
+	hasData = hasData || activityLevelFound
+
+	hrFound, hrMin, hrMax, hrAvg, err := s.syncHeartRateIntraday(ctx, day)
+	if err != nil {
+		return false, fmt.Errorf("syncing intraday heart rate for %s: %w", dayStr, err)
+	}
+	hasData = hasData || hrFound
+	summary.HeartRateMinBpm, summary.HeartRateMaxBpm, summary.HeartRateAvgBpm = hrMin, hrMax, hrAvg
+
+	bgFound, bgAvg, bgMin, bgMax, err := s.syncBloodGlucose(ctx, day)
+	if err != nil {
+		return false, fmt.Errorf("syncing blood glucose for %s: %w", dayStr, err)
+	}
+	hasData = hasData || bgFound
+	summary.BloodGlucoseAvgMgDl, summary.BloodGlucoseMinMgDl, summary.BloodGlucoseMaxMgDl = bgAvg, bgMin, bgMax
+
+	cbtFound, cbtAvg, cbtMin, cbtMax, err := s.syncCoreBodyTemperature(ctx, day)
+	if err != nil {
+		return false, fmt.Errorf("syncing core body temperature for %s: %w", dayStr, err)
+	}
+	hasData = hasData || cbtFound
+	summary.CoreBodyTemperatureAvgC, summary.CoreBodyTemperatureMinC, summary.CoreBodyTemperatureMaxC = cbtAvg, cbtMin, cbtMax
+
+	if err := s.upsertDailySummary(ctx, summary); err != nil {
 		return false, fmt.Errorf("upserting daily summary for %s: %w", dayStr, err)
 	}
 
@@ -80,12 +122,6 @@ func (s *DBSyncer) SyncDay(ctx context.Context, day time.Time) (bool, error) {
 	}
 	hasData = hasData || stepsFound
 
-	hrFound, err := s.syncHeartRateIntraday(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing intraday heart rate for %s: %w", dayStr, err)
-	}
-	hasData = hasData || hrFound
-
 	zoneDefsFound, err := s.syncHeartRateZoneDefinitions(ctx, day)
 	if err != nil {
 		return false, fmt.Errorf("syncing heart rate zone definitions for %s: %w", dayStr, err)
@@ -109,18 +145,6 @@ func (s *DBSyncer) SyncDay(ctx context.Context, day time.Time) (bool, error) {
 		return false, fmt.Errorf("syncing sleep respiratory rate for %s: %w", dayStr, err)
 	}
 	hasData = hasData || respRateSleepFound
-
-	bloodGlucoseFound, err := s.syncBloodGlucose(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing blood glucose for %s: %w", dayStr, err)
-	}
-	hasData = hasData || bloodGlucoseFound
-
-	coreBodyTempFound, err := s.syncCoreBodyTemperature(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing core body temperature for %s: %w", dayStr, err)
-	}
-	hasData = hasData || coreBodyTempFound
 
 	return hasData, nil
 }
@@ -150,45 +174,16 @@ func isOnDay(t time.Time, day time.Time) bool {
 	return ty == dy && tm == dm && td == dd
 }
 
-// dailySummary holds every watch_daily_summary column DBSyncer knows how
-// to populate. Pointer fields distinguish "found no value" (nil, leaves
-// any existing stored value untouched via COALESCE on upsert) from
-// "found zero" (non-nil, overwrites).
-type dailySummary struct {
-	StepsTotal                    *int64
-	DistanceM                     *float64
-	FloorsClimbed                 *int64
-	AltitudeGainM                 *float64
-	SedentaryMinutes              *int64
-	ActiveMinutes                 *int64
-	LightActiveMinutes            *int64
-	ModerateActiveMinutes         *int64
-	VigorousActiveMinutes         *int64
-	ActiveZoneMinutes             *int64
-	KcalBurnedGoogle              *float64
-	ActiveEnergyBurnedKcal        *float64
-	RestingHeartRateBpm           *float64
-	HeartRateMinBpm               *float64
-	HeartRateMaxBpm               *float64
-	HeartRateAvgBpm               *float64
-	HrvAvgMs                      *float64
-	Vo2Max                        *float64
-	Vo2MaxSample                  *float64
-	Vo2MaxRunSample               *float64
-	Spo2AvgPct                    *float64
-	Spo2MinPct                    *float64
-	RespiratoryRateAvgBpm         *float64
-	SleepDurationMinutes          *int64
-	SleepTemperatureC             *float64
-	SleepTemperatureBaselineC     *float64
-	SleepTemperatureDeviation30dC *float64
-	RawPayload                    map[string]json.RawMessage
-}
-
-func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (dailySummary, bool, error) {
-	var out dailySummary
+// fetchDailySummary builds the DailyScalar portion of the day's
+// healthdata.DailySummary: everything with no separate Timeline/category
+// table counterpart. Heart-rate/blood-glucose/core-body-temperature stats
+// and the active-minutes/active-zone-minutes totals are deliberately NOT
+// here — those are computed by their own sync*/upsert* functions (see
+// SyncDay) from the same fetch that populates their sample/category
+// tables, rather than a second, redundant API call.
+func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (healthdata.DailySummary, bool, error) {
+	out := healthdata.DailySummary{Day: dayKey(day)}
 	hasData := false
-	out.RawPayload = map[string]json.RawMessage{}
 
 	// ---- Daily aggregates: list() unfiltered, matched to day client-side ----
 
@@ -248,24 +243,26 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (dailyS
 		hasData = true
 	}
 
-	// ---- total-calories: only available via dailyRollUp ----
-	{
-		start, end := dayBounds(day)
-		raw, err := s.Client.DailyRollUp(ctx, "total-calories",
-			CivilDateTime{Date: Date{Year: start.Year(), Month: int(start.Month()), Day: start.Day()}},
-			CivilDateTime{Date: Date{Year: end.Year(), Month: int(end.Month()), Day: end.Day()}})
-		if err != nil {
-			return out, false, fmt.Errorf("total-calories dailyRollUp: %w", err)
-		}
-		points, err := ExtractRollupValues[TotalCaloriesRollup](raw, "totalCalories")
-		if err != nil {
-			return out, false, fmt.Errorf("decoding total-calories rollup: %w", err)
-		}
-		if len(points) > 0 {
-			kcal := float64(points[0].Value.KcalSum)
-			out.KcalBurnedGoogle = &kcal
-			hasData = true
-		}
+	// ---- dailyRollUp-only types (list() rejected outright) ----
+
+	if v, found, err := fetchDailyRollup[TotalCaloriesRollup](ctx, s.Client, "total-calories", day); err != nil {
+		return out, false, err
+	} else if found {
+		kcal := float64(v.KcalSum)
+		out.KcalBurnedGoogle = &kcal
+		hasData = true
+	}
+
+	// floors' own rollup response has always come back empty for this
+	// account, so FloorsRollup's shape (values.go) is a best-effort guess,
+	// not confirmed — safe if wrong, ExtractRollupValues simply finds no
+	// points rather than silently decoding the wrong field.
+	if v, found, err := fetchDailyRollup[FloorsRollup](ctx, s.Client, "floors", day); err != nil {
+		return out, false, err
+	} else if found {
+		climbed := int64(v.FloorsSum)
+		out.FloorsClimbed = &climbed
+		hasData = true
 	}
 
 	// ---- Interval types, filtered server-side to this day ----
@@ -291,31 +288,6 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (dailyS
 		metersF := float64(total)
 		out.DistanceM = &metersF
 		hasData = true
-	}
-
-	// floors has NoList set (list() is rejected outright by the API for it
-	// per datatypes.go), so dailyRollUp is the only path — but this
-	// account's own floors rollup has always come back empty, so
-	// FloorsRollup's shape (values.go) is a best-effort guess, not
-	// confirmed. A wrong guess here is safe: ExtractRollupValues simply
-	// finds no points rather than silently decoding the wrong field.
-	{
-		start, end := dayBounds(day)
-		raw, err := s.Client.DailyRollUp(ctx, "floors",
-			CivilDateTime{Date: Date{Year: start.Year(), Month: int(start.Month()), Day: start.Day()}},
-			CivilDateTime{Date: Date{Year: end.Year(), Month: int(end.Month()), Day: end.Day()}})
-		if err != nil {
-			return out, false, fmt.Errorf("floors dailyRollUp: %w", err)
-		}
-		points, err := ExtractRollupValues[FloorsRollup](raw, "floors")
-		if err != nil {
-			return out, false, fmt.Errorf("decoding floors rollup: %w", err)
-		}
-		if len(points) > 0 {
-			climbed := int64(points[0].Value.FloorsSum)
-			out.FloorsClimbed = &climbed
-			hasData = true
-		}
 	}
 
 	if alt, err := fetchIntervalPoints[Altitude](ctx, s.Client, "altitude", day); err != nil {
@@ -356,40 +328,6 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (dailyS
 		hasData = true
 	}
 
-	if am, err := fetchIntervalPoints[ActiveMinutes](ctx, s.Client, "active-minutes", day); err != nil {
-		return out, false, err
-	} else if len(am) > 0 {
-		var total, light, moderate, vigorous int64
-		for _, p := range am {
-			for _, lvl := range p.ActiveMinutesByActivityLevel {
-				m := int64(lvl.Minutes)
-				total += m
-				switch lvl.ActivityLevel {
-				case "LIGHT":
-					light += m
-				case "MODERATE":
-					moderate += m
-				case "VIGOROUS":
-					vigorous += m
-				}
-			}
-		}
-		out.ActiveMinutes = &total
-		out.LightActiveMinutes, out.ModerateActiveMinutes, out.VigorousActiveMinutes = &light, &moderate, &vigorous
-		hasData = true
-	}
-
-	if azm, err := fetchIntervalPoints[ActiveZoneMinutes](ctx, s.Client, "active-zone-minutes", day); err != nil {
-		return out, false, err
-	} else if len(azm) > 0 {
-		var total int64
-		for _, p := range azm {
-			total += int64(p.ActiveZoneMinutes)
-		}
-		out.ActiveZoneMinutes = &total
-		hasData = true
-	}
-
 	// ---- Sample types, last-of-day (same pattern as syncBodyMeasurement's
 	// weight/height/body-fat) ----
 
@@ -406,27 +344,6 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (dailyS
 	} else if len(pts) > 0 {
 		v := float64(pts[len(pts)-1].MlPerKgPerMin)
 		out.Vo2MaxRunSample = &v
-		hasData = true
-	}
-
-	// ---- Heart rate samples, filtered server-side to this day ----
-	if hr, err := fetchSamplePoints[HeartRate](ctx, s.Client, "heart-rate", day); err != nil {
-		return out, false, err
-	} else if len(hr) > 0 {
-		var sum, min, max float64
-		min = float64(hr[0].BeatsPerMinute)
-		for _, p := range hr {
-			v := float64(p.BeatsPerMinute)
-			sum += v
-			if v < min {
-				min = v
-			}
-			if v > max {
-				max = v
-			}
-		}
-		avg := sum / float64(len(hr))
-		out.HeartRateMinBpm, out.HeartRateMaxBpm, out.HeartRateAvgBpm = &min, &max, &avg
 		hasData = true
 	}
 
@@ -468,6 +385,29 @@ func fetchDailyAggregate[T any](ctx context.Context, client *Client, dataTypeNam
 		}
 	}
 	return zero, false, nil
+}
+
+// fetchDailyRollup fetches a single dailyRollUp value for exactly day's
+// civil range (window_size_days defaults to 1) and decodes it — the
+// generic form of the floors/total-calories/calories-in-heart-rate-zone
+// "list() is rejected, dailyRollUp is the only path" pattern.
+func fetchDailyRollup[T any](ctx context.Context, client *Client, dataTypeName string, day time.Time) (T, bool, error) {
+	var zero T
+	start, end := dayBounds(day)
+	raw, err := client.DailyRollUp(ctx, dataTypeName,
+		CivilDateTime{Date: Date{Year: start.Year(), Month: int(start.Month()), Day: start.Day()}},
+		CivilDateTime{Date: Date{Year: end.Year(), Month: int(end.Month()), Day: end.Day()}})
+	if err != nil {
+		return zero, false, fmt.Errorf("%s dailyRollUp: %w", dataTypeName, err)
+	}
+	points, err := ExtractRollupValues[T](raw, ValueKey(dataTypeName))
+	if err != nil {
+		return zero, false, fmt.Errorf("decoding %s rollup: %w", dataTypeName, err)
+	}
+	if len(points) == 0 {
+		return zero, false, nil
+	}
+	return points[0].Value, true, nil
 }
 
 // fetchIntervalPoints fetches an interval-kind data type filtered

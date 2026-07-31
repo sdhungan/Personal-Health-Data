@@ -68,20 +68,43 @@ CREATE TABLE sync_state (
 
 -- =============================================================================
 -- Watch / Google Health API data
+--
+-- Every table below follows one of five fixed shapes, chosen per data type
+-- by how its values are actually useful to look at (not just by what the
+-- API can technically return) -- see cronometer-integration.md's sibling
+-- discussion doc for the full reasoning per metric:
+--   1. DailyScalar     -- one column in watch_daily_summary, one row/day.
+--   2. DailyByCategory -- day+enum-category breakdown (watch_*_by_zone,
+--                         watch_*_by_level tables) -- e.g. minutes per
+--                         heart-rate zone, not just a daily total.
+--   3. Hourly           -- day+hour buckets (watch_steps_hourly) -- coarser
+--                         than raw, finer than a daily total.
+--   4. Timeline          -- exact-timestamp samples (watch_*_sample /
+--                         watch_heart_rate_intraday) -- kept granular
+--                         because *when* it happened matters (heart rate
+--                         during exercise, glucose after a meal). The sync
+--                         job always computes that day's avg/min/max from
+--                         the same fetch straight into watch_daily_summary,
+--                         rather than a separate simplified query.
+--   5. SegmentTimeline   -- start/end spans through the day (watch_sleep_stage,
+--                         watch_activity_level_segment) -- for metrics whose
+--                         *shape across the day* is the point, not a total.
+-- Session types (sleep, exercise, ECG/IRN) don't fit any of the five --
+-- their internal structure is genuinely bespoke, kept as their own tables.
 -- =============================================================================
 
--- One row per calendar day, covering everything the Google Health API
--- exposes as a daily aggregate or that we roll up ourselves (activity
--- totals, resting HR, HRV, VO2 max, SpO2, respiratory rate, sleep totals).
+-- DailyScalar: one row per calendar day, covering everything the Google
+-- Health API exposes as a daily aggregate or that we roll up ourselves.
 -- `raw_payload` keeps the full JSON response for that day so a first-pass
--- column set can't silently lose data — future columns can be backfilled
+-- column set can't silently lose data -- future columns can be backfilled
 -- from it without re-hitting the API.
 -- kcal_burned_google/kcal_burned_cronometer (on cronometer_daily_nutrition)
 -- are deliberately two separate columns, not one: Google's watch-based
 -- estimate and Cronometer's own (BMR + activity + food thermic-effect)
--- expenditure figure are different calculations from different sources,
--- and Cronometer sync doesn't exist in this codebase yet (see
--- prerequisite.md) so its column sits NULL until that's built.
+-- expenditure figure are different calculations from different sources.
+-- blood_glucose_*/core_body_temperature_* are computed by the sync job from
+-- the same Timeline fetch that populates their _sample tables below (same
+-- pattern heart-rate already uses) -- not a separate "last sample" query.
 CREATE TABLE watch_daily_summary (
     day                      TEXT PRIMARY KEY,
     steps_total              INTEGER,
@@ -89,11 +112,11 @@ CREATE TABLE watch_daily_summary (
     floors_climbed            INTEGER,
     altitude_gain_m           REAL,
     sedentary_minutes         INTEGER,
+    -- Grand total; the light/moderate/vigorous breakdown lives in
+    -- watch_active_minutes_by_level (DailyByCategory) -- kept here too as a
+    -- denormalized convenience column, same relationship steps_total has to
+    -- watch_steps_hourly.
     active_minutes            INTEGER,
-    light_active_minutes      INTEGER,
-    moderate_active_minutes   INTEGER,
-    vigorous_active_minutes   INTEGER,
-    active_zone_minutes       INTEGER,
     kcal_burned_google        REAL,
     active_energy_burned_kcal REAL,
     resting_heart_rate_bpm    REAL,
@@ -107,9 +130,13 @@ CREATE TABLE watch_daily_summary (
     spo2_avg_pct              REAL,
     spo2_min_pct              REAL,
     respiratory_rate_avg_bpm  REAL,
+    blood_glucose_avg_mg_dl   REAL,
+    blood_glucose_min_mg_dl   REAL,
+    blood_glucose_max_mg_dl   REAL,
+    core_body_temperature_avg_c REAL,
+    core_body_temperature_min_c REAL,
+    core_body_temperature_max_c REAL,
     sleep_duration_minutes    INTEGER,
-    sleep_score               INTEGER,
-    stress_management_score   INTEGER,
     sleep_temperature_c                 REAL,
     sleep_temperature_baseline_c        REAL,
     sleep_temperature_deviation_30d_c   REAL,
@@ -119,8 +146,30 @@ CREATE TABLE watch_daily_summary (
     updated_at                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
--- Hourly step buckets. Low volume (24 rows/day) so, unlike heart rate, it's
--- kept in full permanently rather than as a prunable cache.
+-- DailyByCategory: minutes of active-minutes per activity level
+-- (LIGHT/MODERATE/VIGOROUS) -- moved out of flat columns for the same
+-- reason the heart-rate-zone tables below already use this shape: a fixed
+-- enum breakdown is still a breakdown, not one more flat column per value.
+CREATE TABLE watch_active_minutes_by_level (
+    day            TEXT NOT NULL,
+    activity_level TEXT NOT NULL,
+    minutes        INTEGER,
+    PRIMARY KEY (day, activity_level)
+);
+
+-- DailyByCategory: active zone minutes per heart-rate zone
+-- (FAT_BURN/CARDIO/PEAK) -- same zone_type domain and column name as
+-- watch_heart_rate_zone_minutes/watch_calories_by_zone below, since it's
+-- the same enum (HeartRateZoneType), just a different measurement.
+CREATE TABLE watch_active_zone_minutes_by_zone (
+    day       TEXT NOT NULL,
+    zone_type TEXT NOT NULL,
+    minutes   INTEGER,
+    PRIMARY KEY (day, zone_type)
+);
+
+-- Hourly: step buckets. Low volume (24 rows/day) so, unlike heart rate,
+-- it's kept in full permanently rather than as a prunable cache.
 CREATE TABLE watch_steps_hourly (
     day       TEXT NOT NULL,
     hour      INTEGER NOT NULL CHECK (hour BETWEEN 0 AND 23),
@@ -130,12 +179,12 @@ CREATE TABLE watch_steps_hourly (
     PRIMARY KEY (day, hour)
 );
 
--- Rolling CACHE of fine-grained (e.g. 1-5min) heart rate samples. This is
--- intentionally NOT the source of truth for historical data: intraday HR at
--- full resolution is high volume, so old rows may be pruned by the sync job
--- or a maintenance task. If the UI needs detailed HR for a day whose cache
--- has been pruned, fetch it live from the Google Health API instead of
--- treating this table as complete history.
+-- Timeline: rolling CACHE of fine-grained (e.g. 1-5min) heart rate samples.
+-- This is intentionally NOT the source of truth for historical data:
+-- intraday HR at full resolution is high volume, so old rows may be pruned
+-- by the sync job or a maintenance task. If the UI needs detailed HR for a
+-- day whose cache has been pruned, fetch it live from the Google Health
+-- API instead of treating this table as complete history.
 CREATE TABLE watch_heart_rate_intraday (
     recorded_at TEXT PRIMARY KEY,
     bpm         REAL NOT NULL,
@@ -144,8 +193,40 @@ CREATE TABLE watch_heart_rate_intraday (
 
 CREATE INDEX idx_watch_heart_rate_intraday_cached_at ON watch_heart_rate_intraday (cached_at);
 
+-- Timeline: full-fidelity blood glucose / core body temperature samples.
+-- The sync job also derives watch_daily_summary's
+-- blood_glucose_*/core_body_temperature_* avg/min/max from this same fetch.
+CREATE TABLE watch_blood_glucose_sample (
+    recorded_at        TEXT PRIMARY KEY,
+    mg_dl              REAL NOT NULL,
+    measurement_source TEXT,
+    measurement_timing TEXT,
+    meal_type          TEXT,
+    specimen           TEXT
+);
+
+CREATE TABLE watch_core_body_temperature_sample (
+    recorded_at          TEXT PRIMARY KEY,
+    celsius              REAL NOT NULL,
+    measurement_location TEXT
+);
+
+-- SegmentTimeline: sedentary/lightly-active/moderately-active/very-active
+-- spans through the day (from activity-level) -- the point of this metric
+-- is *when* each level occurred, not just a daily total.
+CREATE TABLE watch_activity_level_segment (
+    id             INTEGER PRIMARY KEY,
+    day            TEXT NOT NULL,
+    activity_level TEXT NOT NULL,
+    start_time     TEXT NOT NULL,
+    end_time       TEXT NOT NULL
+);
+
+CREATE INDEX idx_watch_activity_level_segment_day ON watch_activity_level_segment (day);
+
 -- One row per sleep session (usually one "main sleep" per day, but naps can
--- add more).
+-- add more). Session shape, not one of the five above -- its own bespoke
+-- structure (a SegmentTimeline of stages nested inside it).
 CREATE TABLE watch_sleep_session (
     id                INTEGER PRIMARY KEY,
     day               TEXT NOT NULL,
@@ -154,7 +235,6 @@ CREATE TABLE watch_sleep_session (
     is_main_sleep     INTEGER NOT NULL DEFAULT 0,
     duration_minutes  INTEGER,
     efficiency_pct    REAL,
-    sleep_score       INTEGER,
     minutes_awake     INTEGER,
     minutes_light     INTEGER,
     minutes_deep      INTEGER,
@@ -170,8 +250,8 @@ CREATE TABLE watch_sleep_session (
 
 CREATE INDEX idx_watch_sleep_session_day ON watch_sleep_session (day);
 
--- Stage-level timeline within a sleep session, for detailed hypnogram-style
--- UI views.
+-- SegmentTimeline nested inside a sleep session, for detailed
+-- hypnogram-style UI views.
 CREATE TABLE watch_sleep_stage (
     sleep_session_id INTEGER NOT NULL REFERENCES watch_sleep_session (id) ON DELETE CASCADE,
     stage_type       TEXT NOT NULL CHECK (stage_type IN ('AWAKE', 'LIGHT', 'DEEP', 'REM')),
@@ -181,7 +261,10 @@ CREATE TABLE watch_sleep_stage (
 
 CREATE INDEX idx_watch_sleep_stage_session ON watch_sleep_stage (sleep_session_id);
 
--- One row per workout/exercise session recorded by the watch.
+-- One row per workout/exercise session recorded by the watch. Session
+-- shape -- its heart-rate detail comes from correlating against
+-- watch_heart_rate_intraday's Timeline by start_time/end_time, not a
+-- separate table.
 CREATE TABLE watch_exercise_session (
     id                  INTEGER PRIMARY KEY,
     day                 TEXT NOT NULL,
@@ -216,7 +299,8 @@ CREATE INDEX idx_watch_ecg_reading_recorded_at ON watch_ecg_reading (recorded_at
 -- daily-heart-rate-zones) -- despite the name's similarity to
 -- watch_heart_rate_zone_minutes below, this is NOT a time-series metric:
 -- it's just "what BPM range counts as each zone type today" (drifts slowly
--- as fitness/resting HR changes), confirmed against a real response.
+-- as fitness/resting HR changes), confirmed against a real response. Not
+-- one of the five shapes either -- a definition, not a measurement.
 CREATE TABLE watch_heart_rate_zone_definition (
     day       TEXT NOT NULL,
     zone_type TEXT NOT NULL,
@@ -225,8 +309,8 @@ CREATE TABLE watch_heart_rate_zone_definition (
     PRIMARY KEY (day, zone_type)
 );
 
--- Actual minutes spent in each heart-rate zone per day (from
--- time-in-heart-rate-zone) -- the real time-series counterpart to the
+-- DailyByCategory: actual minutes spent in each heart-rate zone per day
+-- (from time-in-heart-rate-zone) -- the real time-series counterpart to the
 -- thresholds above.
 CREATE TABLE watch_heart_rate_zone_minutes (
     day       TEXT NOT NULL,
@@ -235,8 +319,8 @@ CREATE TABLE watch_heart_rate_zone_minutes (
     PRIMARY KEY (day, zone_type)
 );
 
--- Calories attributed to time spent in each heart-rate zone per day (from
--- calories-in-heart-rate-zone). INFERRED shape (see
+-- DailyByCategory: calories attributed to time spent in each heart-rate
+-- zone per day (from calories-in-heart-rate-zone). INFERRED shape (see
 -- internal/googlehealth/values.go's confidence-level convention) --
 -- Google's reference doesn't document this type's fields directly.
 CREATE TABLE watch_calories_by_zone (
@@ -244,24 +328,6 @@ CREATE TABLE watch_calories_by_zone (
     zone_type TEXT NOT NULL,
     kcal      REAL,
     PRIMARY KEY (day, zone_type)
-);
-
--- Full-fidelity sample tables for types this account's current
--- watch/phone combination has never returned data for, but are fetchable
--- under our existing scopes and get plumbing anyway (see prerequisite.md).
-CREATE TABLE watch_blood_glucose_sample (
-    recorded_at        TEXT PRIMARY KEY,
-    mg_dl              REAL NOT NULL,
-    measurement_source TEXT,
-    measurement_timing TEXT,
-    meal_type          TEXT,
-    specimen           TEXT
-);
-
-CREATE TABLE watch_core_body_temperature_sample (
-    recorded_at          TEXT PRIMARY KEY,
-    celsius              REAL NOT NULL,
-    measurement_location TEXT
 );
 
 -- =============================================================================
@@ -325,15 +391,19 @@ CREATE TABLE cronometer_daily_nutrition (
     b3_mg             REAL,
     b5_mg             REAL,
     b6_mg             REAL,
-    b12_mg            REAL,
+    -- b12/vitamin_a/vitamin_k are genuinely reported in micrograms by
+    -- Cronometer's API (confirmed 2026-07-31 against a real get_nutrients
+    -- response: ids 418/320/430 all carry unit "µg", not mg/IU) -- named
+    -- accordingly, unlike vitamin_d_iu below which really is IU.
+    b12_ug            REAL,
     biotin_ug         REAL,
     choline_mg        REAL,
     folate_ug         REAL,
-    vitamin_a_iu      REAL,
+    vitamin_a_ug      REAL,
     vitamin_c_mg      REAL,
     vitamin_d_iu      REAL,
     vitamin_e_mg      REAL,
-    vitamin_k_mg      REAL,
+    vitamin_k_ug      REAL,
     calcium_mg        REAL,
     chromium_ug       REAL,
     copper_mg         REAL,
@@ -404,15 +474,15 @@ CREATE TABLE cronometer_serving (
     b3_mg             REAL,
     b5_mg             REAL,
     b6_mg             REAL,
-    b12_mg            REAL,
+    b12_ug            REAL,
     biotin_ug         REAL,
     choline_mg        REAL,
     folate_ug         REAL,
-    vitamin_a_iu      REAL,
+    vitamin_a_ug      REAL,
     vitamin_c_mg      REAL,
     vitamin_d_iu      REAL,
     vitamin_e_mg      REAL,
-    vitamin_k_mg      REAL,
+    vitamin_k_ug      REAL,
     calcium_mg        REAL,
     chromium_ug       REAL,
     copper_mg         REAL,

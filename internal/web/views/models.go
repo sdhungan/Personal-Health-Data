@@ -13,6 +13,14 @@ type DashboardData struct {
 	NextDay  string
 	View     string // "data" or "journal" — which tab is active
 	Tiles    []TileData
+
+	// CronometerConnected reports whether encrypted Cronometer credentials
+	// are on file (see internal/cronometer.LoadCredentials) — drives
+	// whether the Nutrition section's account card shows the login form or
+	// a connected status. CronometerMessage carries a login error/status to
+	// show alongside it, when set.
+	CronometerConnected bool
+	CronometerMessage   string
 }
 
 // TileKind selects which body a tile renders.
@@ -23,6 +31,7 @@ const (
 	TileKindSleep      TileKind = "sleep"
 	TileKindActivities TileKind = "activities"
 	TileKindBody       TileKind = "body"
+	TileKindFoodLog    TileKind = "food_log"
 )
 
 // TileData is a generic tile. Not every field applies to every kind —
@@ -55,6 +64,9 @@ type TileData struct {
 
 	// TileKindBody
 	Body *BodyMeasurementData
+
+	// TileKindFoodLog
+	FoodLog []ServingSummary
 }
 
 // DetailData is an expanded tile's rich detail view, for metrics with
@@ -135,6 +147,21 @@ type ActivityDetail struct {
 type HRSample struct {
 	TimeLabel string
 	Bpm       float64
+}
+
+// ServingSummary is one row in the food-log tile — a single
+// cronometer_serving entry. QuantityLabel is pre-formatted ("150 g", "1
+// cup") since quantity_units is only known when Cronometer's own food
+// lookup succeeded (see internal/cronometer's sync — unresolved foods have
+// no quantity/units, only grams-implied nutrients).
+type ServingSummary struct {
+	TimeLabel     string
+	FoodName      string
+	QuantityLabel string
+	EnergyKcal    float64
+	ProteinG      *float64
+	CarbsG        *float64
+	FatG          *float64
 }
 
 // JournalData is the state of the journal editor for one day.

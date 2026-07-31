@@ -88,7 +88,7 @@ templ SyncButton(day, view string, syncing bool) {
 		class="sync-btn"
 		data-on:click={ postExpr(syncURL(day, view)) }
 		disabled?={ syncing }
-		title="Force sync this day's Google Health data now"
+		title="Force sync this day's data now (Google Health, and Cronometer once connected)"
 	>
 		if syncing {
 			@iconSpinner()

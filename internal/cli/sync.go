@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -26,7 +27,13 @@ func newSyncCmd() *cobra.Command {
 			if err := runGoogleHealthSyncOnce(context.Background()); err != nil {
 				return err
 			}
-			fmt.Println("TODO: run the Cronometer sync pass too")
+			// Cronometer is deliberately independent of Google Health (see
+			// schema.sql) — a failure here (e.g. "healthd auth cronometer"
+			// never run) is logged, not fatal, so it never blocks the
+			// Google Health pass that already succeeded above.
+			if err := runCronometerSyncOnce(context.Background()); err != nil {
+				fmt.Fprintln(os.Stderr, "cronometer sync error:", err)
+			}
 			return nil
 		},
 	}

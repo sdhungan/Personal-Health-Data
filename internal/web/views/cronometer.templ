@@ -1,0 +1,46 @@
+package views
+
+// CronometerAccountCard sits at the bottom of the Nutrition section: a
+// login form (email/password, verified live against Cronometer before
+// being saved encrypted — see handleCronometerLogin) when no credentials
+// are on file yet, or a small connected status once they are. Its own
+// stable id lets the login handler patch just this card, same pattern as
+// SyncButton/bodyTileBody.
+templ CronometerAccountCard(connected bool, message string) {
+	<div id="cronometer-account" class="tile" data-category="nutrition">
+		<div class="tile-header">
+			<div class="tile-header-left">
+				<span class="tile-icon-badge">
+					@iconApple()
+				</span>
+				<span class="tile-title">Cronometer Account</span>
+			</div>
+		</div>
+		<div class="tile-body">
+			if connected {
+				<div class="body-form-footer">
+					<span class="body-saved-status">Connected — the Sync button now syncs Cronometer alongside Google Health.</span>
+				</div>
+			} else {
+				<div class="body-form">
+					<div class="body-field">
+						<label for="crono-email">Email</label>
+						<input id="crono-email" type="email" autocomplete="username" data-bind:cronousername/>
+					</div>
+					<div class="body-field">
+						<label for="crono-password">Password</label>
+						<input id="crono-password" type="password" autocomplete="current-password" data-bind:cronopassword/>
+					</div>
+					<div class="body-form-footer">
+						<button class="body-carry-btn" data-on:click={ postExpr(cronometerLoginURL()) }>
+							Connect
+						</button>
+						if message != "" {
+							<span class="journal-error">{ message }</span>
+						}
+					</div>
+				</div>
+			}
+		</div>
+	</div>
+}

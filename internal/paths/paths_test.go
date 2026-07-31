@@ -76,17 +76,19 @@ func TestAccessorsNestUnderRoot(t *testing.T) {
 	}
 
 	cases := map[string]string{
-		"DBDir":           p.DBDir(),
-		"ConfigDir":       p.ConfigDir(),
-		"LogsDir":         p.LogsDir(),
-		"KeysDir":         p.KeysDir(),
-		"ServiceDir":      p.ServiceDir(),
-		"DBFile":          p.DBFile(),
-		"ConfigFile":      p.ConfigFile(),
-		"GoogleOAuthFile": p.GoogleOAuthFile(),
-		"SyncLogFile":     p.SyncLogFile(),
-		"ServerLogFile":   p.ServerLogFile(),
-		"DBKeyFile":       p.DBKeyFile(),
+		"DBDir":                     p.DBDir(),
+		"ConfigDir":                 p.ConfigDir(),
+		"LogsDir":                   p.LogsDir(),
+		"KeysDir":                   p.KeysDir(),
+		"ServiceDir":                p.ServiceDir(),
+		"DBFile":                    p.DBFile(),
+		"ConfigFile":                p.ConfigFile(),
+		"GoogleOAuthFile":           p.GoogleOAuthFile(),
+		"CronometerCredentialsFile": p.CronometerCredentialsFile(),
+		"CronometerSessionFile":     p.CronometerSessionFile(),
+		"SyncLogFile":               p.SyncLogFile(),
+		"ServerLogFile":             p.ServerLogFile(),
+		"DBKeyFile":                 p.DBKeyFile(),
 	}
 
 	for name, got := range cases {
@@ -180,7 +182,7 @@ func TestExternalOutputPath(t *testing.T) {
 		t.Errorf("ExternalOutputPath = %q, want %q", got, filepath.Clean(external))
 	}
 
-	managedPaths := []string{p.DBFile(), p.DBKeyFile(), p.GoogleOAuthFile(), p.ConfigFile()}
+	managedPaths := []string{p.DBFile(), p.DBKeyFile(), p.GoogleOAuthFile(), p.ConfigFile(), p.CronometerCredentialsFile(), p.CronometerSessionFile()}
 	for _, m := range managedPaths {
 		if _, err := p.ExternalOutputPath(m); err == nil {
 			t.Errorf("ExternalOutputPath(%q): expected error for managed path, got none", m)

@@ -314,9 +314,27 @@ type SedentaryPeriod struct {
 	Interval ObservationTimeInterval `json:"interval"`
 }
 
-// CaloriesInHeartRateZone is INFERRED from TimeInHeartRateZone's shape.
+// CaloriesInHeartRateZone is INFERRED from TimeInHeartRateZone's shape. No
+// longer used for syncing (calories-in-heart-rate-zone rejects list()
+// outright — see datatypes.go's NoList) but kept for DumpToday's capture.
 type CaloriesInHeartRateZone struct {
 	Interval      ObservationTimeInterval `json:"interval"`
 	HeartRateZone string                  `json:"heartRateZone"`
 	Kcal          PBFloat64               `json:"kcal"`
+}
+
+// ---- DOCUMENTED (dailyRollUp response shapes) ----
+
+// CaloriesInHeartRateZoneRollup is DOCUMENTED from Google's own proto
+// reference (the dailyRollUp union field for calories-in-heart-rate-zone)
+// but not yet observed in a real response from this account — the
+// per-zone breakdown already arrives grouped server-side, unlike the
+// rejected list() path's individual interval points.
+type CaloriesInHeartRateZoneRollup struct {
+	CaloriesInHeartRateZones []CaloriesInHeartRateZoneRollupItem `json:"caloriesInHeartRateZones"`
+}
+
+type CaloriesInHeartRateZoneRollupItem struct {
+	HeartRateZone string    `json:"heartRateZone"`
+	Kcal          PBFloat64 `json:"kcal"`
 }

@@ -62,6 +62,10 @@ func bodyMeasurementCarryForwardURL(day string) string {
 	return APIURL("body-measurement/carry-forward", url.Values{"day": {day}})
 }
 
+func cronometerLoginURL() string {
+	return APIURL("cronometer/login", nil)
+}
+
 func boolJS(b bool) string {
 	if b {
 		return "true"

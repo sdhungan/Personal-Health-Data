@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/sdhungan/Personal-Health-Data/internal/healthdata"
 )
 
 // syncSleep upserts every sleep session starting on day into
@@ -30,83 +32,56 @@ func (s *DBSyncer) syncSleep(ctx context.Context, day time.Time) (bool, error) {
 	}
 
 	for i, sess := range sessions {
-		if err := s.upsertSleepSession(ctx, sess, i == mainIdx); err != nil {
+		start, err := sess.Interval.Start()
+		if err != nil {
+			return false, fmt.Errorf("parsing sleep start time: %w", err)
+		}
+		end, err := sess.Interval.End()
+		if err != nil {
+			return false, fmt.Errorf("parsing sleep end time: %w", err)
+		}
+
+		var minutesLight, minutesDeep, minutesRem int64
+		for _, st := range sess.Summary.StagesSummary {
+			switch st.Type {
+			case "LIGHT":
+				minutesLight = int64(st.Minutes)
+			case "DEEP":
+				minutesDeep = int64(st.Minutes)
+			case "REM":
+				minutesRem = int64(st.Minutes)
+			}
+		}
+
+		var efficiencyPct *float64
+		if sess.Summary.MinutesInSleepPeriod > 0 {
+			e := float64(sess.Summary.MinutesAsleep) / float64(sess.Summary.MinutesInSleepPeriod) * 100
+			efficiencyPct = &e
+		}
+
+		duration := int64(sess.Summary.MinutesInSleepPeriod)
+		awake := int64(sess.Summary.MinutesAwake)
+		domain := healthdata.SleepSession{
+			Day: dayKey(start.In(time.Local)), StartTime: start, EndTime: end, IsMainSleep: i == mainIdx,
+			DurationMinutes: &duration, EfficiencyPct: efficiencyPct, MinutesAwake: &awake,
+			MinutesLight: &minutesLight, MinutesDeep: &minutesDeep, MinutesRem: &minutesRem,
+		}
+
+		stages := make([]healthdata.SleepStage, 0, len(sess.Stages))
+		for _, st := range sess.Stages {
+			stStart, e1 := time.Parse(time.RFC3339, st.StartTime)
+			stEnd, e2 := time.Parse(time.RFC3339, st.EndTime)
+			if e1 != nil || e2 != nil {
+				continue
+			}
+			stages = append(stages, healthdata.SleepStage{StageType: st.Type, StartTime: stStart, EndTime: stEnd})
+		}
+
+		if _, err := s.upsertSleepSession(ctx, domain, stages); err != nil {
 			return false, err
 		}
 	}
 	return len(sessions) > 0, nil
-}
-
-func (s *DBSyncer) upsertSleepSession(ctx context.Context, sess Sleep, isMain bool) error {
-	start, err := sess.Interval.Start()
-	if err != nil {
-		return fmt.Errorf("parsing sleep start time: %w", err)
-	}
-	end, err := sess.Interval.End()
-	if err != nil {
-		return fmt.Errorf("parsing sleep end time: %w", err)
-	}
-
-	var minutesLight, minutesDeep, minutesRem int64
-	for _, st := range sess.Summary.StagesSummary {
-		switch st.Type {
-		case "LIGHT":
-			minutesLight = int64(st.Minutes)
-		case "DEEP":
-			minutesDeep = int64(st.Minutes)
-		case "REM":
-			minutesRem = int64(st.Minutes)
-		}
-	}
-
-	var efficiencyPct *float64
-	if sess.Summary.MinutesInSleepPeriod > 0 {
-		e := float64(sess.Summary.MinutesAsleep) / float64(sess.Summary.MinutesInSleepPeriod) * 100
-		efficiencyPct = &e
-	}
-
-	isMainInt := 0
-	if isMain {
-		isMainInt = 1
-	}
-
-	var id int64
-	err = s.DB.QueryRowContext(ctx, `
-		INSERT INTO watch_sleep_session (
-			day, start_time, end_time, is_main_sleep, duration_minutes,
-			efficiency_pct, minutes_awake, minutes_light, minutes_deep, minutes_rem
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(day, start_time) DO UPDATE SET
-			end_time         = excluded.end_time,
-			is_main_sleep    = excluded.is_main_sleep,
-			duration_minutes = excluded.duration_minutes,
-			efficiency_pct   = excluded.efficiency_pct,
-			minutes_awake    = excluded.minutes_awake,
-			minutes_light    = excluded.minutes_light,
-			minutes_deep     = excluded.minutes_deep,
-			minutes_rem      = excluded.minutes_rem
-		RETURNING id
-	`,
-		dayKey(start.In(time.Local)), start.Format(time.RFC3339), end.Format(time.RFC3339), isMainInt,
-		int64(sess.Summary.MinutesInSleepPeriod), efficiencyPct, int64(sess.Summary.MinutesAwake),
-		minutesLight, minutesDeep, minutesRem,
-	).Scan(&id)
-	if err != nil {
-		return fmt.Errorf("upserting watch_sleep_session: %w", err)
-	}
-
-	if _, err := s.DB.ExecContext(ctx, `DELETE FROM watch_sleep_stage WHERE sleep_session_id = ?`, id); err != nil {
-		return fmt.Errorf("clearing old sleep stages: %w", err)
-	}
-	for _, stage := range sess.Stages {
-		if _, err := s.DB.ExecContext(ctx, `
-			INSERT INTO watch_sleep_stage (sleep_session_id, stage_type, start_time, end_time)
-			VALUES (?, ?, ?, ?)
-		`, id, stage.Type, stage.StartTime, stage.EndTime); err != nil {
-			return fmt.Errorf("inserting sleep stage: %w", err)
-		}
-	}
-	return nil
 }
 
 // syncExercise upserts every workout starting on day into
@@ -120,48 +95,32 @@ func (s *DBSyncer) syncExercise(ctx context.Context, day time.Time) (bool, error
 		return false, err
 	}
 	for _, sess := range sessions {
-		if err := s.upsertExerciseSession(ctx, sess); err != nil {
+		start, err := sess.Interval.Start()
+		if err != nil {
+			return false, fmt.Errorf("parsing exercise start time: %w", err)
+		}
+		end, err := sess.Interval.End()
+		if err != nil {
+			return false, fmt.Errorf("parsing exercise end time: %w", err)
+		}
+
+		duration := int64(sess.ActiveDuration.Duration().Minutes())
+		var avgHR *float64
+		if sess.MetricsSummary.AverageHeartRateBeatsPerMinute > 0 {
+			v := float64(sess.MetricsSummary.AverageHeartRateBeatsPerMinute)
+			avgHR = &v
+		}
+		calories := float64(sess.MetricsSummary.CaloriesKcal)
+
+		domain := healthdata.ExerciseSession{
+			Day: dayKey(start.In(time.Local)), ExerciseType: sess.ExerciseType, StartTime: start, EndTime: end,
+			DurationMinutes: &duration, CaloriesBurned: &calories, AvgHeartRateBpm: avgHR,
+		}
+		if err := s.upsertExerciseSession(ctx, domain); err != nil {
 			return false, err
 		}
 	}
 	return len(sessions) > 0, nil
-}
-
-func (s *DBSyncer) upsertExerciseSession(ctx context.Context, sess Exercise) error {
-	start, err := sess.Interval.Start()
-	if err != nil {
-		return fmt.Errorf("parsing exercise start time: %w", err)
-	}
-	end, err := sess.Interval.End()
-	if err != nil {
-		return fmt.Errorf("parsing exercise end time: %w", err)
-	}
-
-	durationMinutes := int64(sess.ActiveDuration.Duration().Minutes())
-	var avgHR *float64
-	if sess.MetricsSummary.AverageHeartRateBeatsPerMinute > 0 {
-		v := float64(sess.MetricsSummary.AverageHeartRateBeatsPerMinute)
-		avgHR = &v
-	}
-
-	_, err = s.DB.ExecContext(ctx, `
-		INSERT INTO watch_exercise_session (
-			day, exercise_type, start_time, end_time, duration_minutes,
-			calories_burned, avg_heart_rate_bpm
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(day, start_time) DO UPDATE SET
-			end_time           = excluded.end_time,
-			duration_minutes   = excluded.duration_minutes,
-			calories_burned    = excluded.calories_burned,
-			avg_heart_rate_bpm = excluded.avg_heart_rate_bpm
-	`,
-		dayKey(start.In(time.Local)), sess.ExerciseType, start.Format(time.RFC3339), end.Format(time.RFC3339),
-		durationMinutes, float64(sess.MetricsSummary.CaloriesKcal), avgHR,
-	)
-	if err != nil {
-		return fmt.Errorf("upserting watch_exercise_session: %w", err)
-	}
-	return nil
 }
 
 // syncECG upserts every ECG reading starting on day into
@@ -176,36 +135,21 @@ func (s *DBSyncer) syncECG(ctx context.Context, day time.Time) (bool, error) {
 		return false, err
 	}
 	for _, r := range readings {
-		if err := s.upsertECGReading(ctx, r); err != nil {
+		start, err := r.Interval.Start()
+		if err != nil {
+			return false, fmt.Errorf("parsing ECG start time: %w", err)
+		}
+		avgHR := float64(r.BeatsPerMinuteAvg)
+		domain := healthdata.ECGReading{Type: "ecg", RecordedAt: start, Classification: r.ResultClassification, AvgHeartRateBpm: &avgHR}
+		if err := s.upsertECGReading(ctx, domain); err != nil {
 			return false, err
 		}
 	}
 	return len(readings) > 0, nil
 }
 
-func (s *DBSyncer) upsertECGReading(ctx context.Context, r Electrocardiogram) error {
-	start, err := r.Interval.Start()
-	if err != nil {
-		return fmt.Errorf("parsing ECG start time: %w", err)
-	}
-
-	_, err = s.DB.ExecContext(ctx, `
-		INSERT INTO watch_ecg_reading (type, recorded_at, classification, avg_heart_rate_bpm)
-		VALUES ('ecg', ?, ?, ?)
-		ON CONFLICT(type, recorded_at) DO UPDATE SET
-			classification     = excluded.classification,
-			avg_heart_rate_bpm = excluded.avg_heart_rate_bpm
-	`, start.Format(time.RFC3339), r.ResultClassification, float64(r.BeatsPerMinuteAvg))
-	if err != nil {
-		return fmt.Errorf("upserting watch_ecg_reading: %w", err)
-	}
-	return nil
-}
-
-// syncBodyMeasurement upserts the day's most recent weight/height/body-fat
-// sample (if any) into body_measurement's raw_* columns — the columns
-// that can come from either a Google Health-connected scale or manual UI
-// entry (see internal/db/schema.sql's body_measurement comment).
+// syncBodyMeasurement fetches the day's most recent weight/height/body-fat
+// sample (if any) and upserts it into body_measurement's raw_* columns.
 func (s *DBSyncer) syncBodyMeasurement(ctx context.Context, day time.Time) (bool, error) {
 	var weightKg, heightCm, bodyFatPct *float64
 
@@ -231,18 +175,8 @@ func (s *DBSyncer) syncBodyMeasurement(ctx context.Context, day time.Time) (bool
 	if weightKg == nil && heightCm == nil && bodyFatPct == nil {
 		return false, nil
 	}
-
-	_, err := s.DB.ExecContext(ctx, `
-		INSERT INTO body_measurement (day, weight_kg_raw, height_cm_raw, body_fat_pct_raw)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(day) DO UPDATE SET
-			weight_kg_raw    = COALESCE(excluded.weight_kg_raw, body_measurement.weight_kg_raw),
-			height_cm_raw    = COALESCE(excluded.height_cm_raw, body_measurement.height_cm_raw),
-			body_fat_pct_raw = COALESCE(excluded.body_fat_pct_raw, body_measurement.body_fat_pct_raw),
-			updated_at       = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-	`, dayKey(day), weightKg, heightCm, bodyFatPct)
-	if err != nil {
-		return false, fmt.Errorf("upserting body_measurement: %w", err)
+	if err := s.upsertBodyMeasurement(ctx, dayKey(day), weightKg, heightCm, bodyFatPct); err != nil {
+		return false, err
 	}
 	return true, nil
 }
@@ -262,16 +196,14 @@ func (s *DBSyncer) syncHeartRateZoneDefinitions(ctx context.Context, day time.Ti
 	}
 
 	dayStr := dayKey(day)
-	if _, err := s.DB.ExecContext(ctx, `DELETE FROM watch_heart_rate_zone_definition WHERE day = ?`, dayStr); err != nil {
-		return false, fmt.Errorf("clearing old heart rate zone definitions for %s: %w", dayStr, err)
-	}
+	rows := make([]healthdata.HeartRateZoneDefinition, 0, len(v.HeartRateZones))
 	for _, z := range v.HeartRateZones {
-		if _, err := s.DB.ExecContext(ctx, `
-			INSERT INTO watch_heart_rate_zone_definition (day, zone_type, min_bpm, max_bpm)
-			VALUES (?, ?, ?, ?)
-		`, dayStr, z.Type, int64(z.MinBeatsPerMinute), int64(z.MaxBeatsPerMinute)); err != nil {
-			return false, fmt.Errorf("inserting heart rate zone definition: %w", err)
-		}
+		rows = append(rows, healthdata.HeartRateZoneDefinition{
+			Day: dayStr, ZoneType: z.Type, MinBpm: int64(z.MinBeatsPerMinute), MaxBpm: int64(z.MaxBeatsPerMinute),
+		})
+	}
+	if err := s.upsertHeartRateZoneDefinitions(ctx, dayStr, rows); err != nil {
+		return false, err
 	}
 	return true, nil
 }
@@ -293,23 +225,83 @@ func (s *DBSyncer) syncHeartRateZoneMinutes(ctx context.Context, day time.Time) 
 		byZone[p.HeartRateZone] += float64(p.DurationMillis) / 60000
 	}
 	dayStr := dayKey(day)
+	rows := make([]healthdata.HeartRateZoneMinutes, 0, len(byZone))
 	for zone, minutes := range byZone {
-		if _, err := s.DB.ExecContext(ctx, `
-			INSERT INTO watch_heart_rate_zone_minutes (day, zone_type, minutes)
-			VALUES (?, ?, ?)
-			ON CONFLICT(day, zone_type) DO UPDATE SET minutes = excluded.minutes
-		`, dayStr, zone, minutes); err != nil {
-			return false, fmt.Errorf("upserting heart rate zone minutes: %w", err)
-		}
+		rows = append(rows, healthdata.HeartRateZoneMinutes{Day: dayStr, ZoneType: zone, Minutes: minutes})
+	}
+	if err := s.upsertHeartRateZoneMinutes(ctx, rows); err != nil {
+		return false, err
 	}
 	return true, nil
 }
 
 // syncCaloriesByZone upserts the day's calories attributed to each
-// heart-rate zone (from calories-in-heart-rate-zone — INFERRED field shape,
-// see values.go's confidence-level convention).
+// heart-rate zone (from calories-in-heart-rate-zone) via dailyRollUp —
+// list() is rejected outright for this data type (confirmed: HTTP 400
+// "List is not supported for data type calories-in-heart-rate-zone, but
+// the following actions are supported: rollup, dailyRollup"), same
+// NoList restriction floors already works around. Response shape is
+// DOCUMENTED (values.go), not yet confirmed against a real response.
 func (s *DBSyncer) syncCaloriesByZone(ctx context.Context, day time.Time) (bool, error) {
-	points, err := fetchIntervalPoints[CaloriesInHeartRateZone](ctx, s.Client, "calories-in-heart-rate-zone", day)
+	v, found, err := fetchDailyRollup[CaloriesInHeartRateZoneRollup](ctx, s.Client, "calories-in-heart-rate-zone", day)
+	if err != nil {
+		return false, err
+	}
+	if !found || len(v.CaloriesInHeartRateZones) == 0 {
+		return false, nil
+	}
+
+	dayStr := dayKey(day)
+	rows := make([]healthdata.CaloriesByZone, 0, len(v.CaloriesInHeartRateZones))
+	for _, z := range v.CaloriesInHeartRateZones {
+		rows = append(rows, healthdata.CaloriesByZone{Day: dayStr, ZoneType: z.HeartRateZone, Kcal: float64(z.Kcal)})
+	}
+	if err := s.upsertCaloriesByZone(ctx, rows); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// syncActiveMinutesByLevel upserts the day's active minutes broken down by
+// activity level (LIGHT/MODERATE/VIGOROUS), and returns the grand total for
+// watch_daily_summary.active_minutes (a denormalized convenience column,
+// same relationship steps_total has to watch_steps_hourly).
+func (s *DBSyncer) syncActiveMinutesByLevel(ctx context.Context, day time.Time) (bool, *int64, error) {
+	points, err := fetchIntervalPoints[ActiveMinutes](ctx, s.Client, "active-minutes", day)
+	if err != nil {
+		return false, nil, err
+	}
+	if len(points) == 0 {
+		return false, nil, nil
+	}
+
+	byLevel := map[string]int64{}
+	var total int64
+	for _, p := range points {
+		for _, lvl := range p.ActiveMinutesByActivityLevel {
+			m := int64(lvl.Minutes)
+			byLevel[lvl.ActivityLevel] += m
+			total += m
+		}
+	}
+
+	dayStr := dayKey(day)
+	rows := make([]healthdata.ActiveMinutesByLevel, 0, len(byLevel))
+	for level, minutes := range byLevel {
+		rows = append(rows, healthdata.ActiveMinutesByLevel{Day: dayStr, Level: level, Minutes: minutes})
+	}
+	if err := s.upsertActiveMinutesByLevel(ctx, dayStr, rows); err != nil {
+		return false, nil, err
+	}
+	return true, &total, nil
+}
+
+// syncActiveZoneMinutesByZone upserts the day's active zone minutes broken
+// down by heart-rate zone (FAT_BURN/CARDIO/PEAK) — no denormalized daily
+// total column exists for this one (unlike active-minutes), the category
+// breakdown is the only representation.
+func (s *DBSyncer) syncActiveZoneMinutesByZone(ctx context.Context, day time.Time) (bool, error) {
+	points, err := fetchIntervalPoints[ActiveZoneMinutes](ctx, s.Client, "active-zone-minutes", day)
 	if err != nil {
 		return false, err
 	}
@@ -317,19 +309,52 @@ func (s *DBSyncer) syncCaloriesByZone(ctx context.Context, day time.Time) (bool,
 		return false, nil
 	}
 
-	byZone := map[string]float64{}
+	byZone := map[string]int64{}
 	for _, p := range points {
-		byZone[p.HeartRateZone] += float64(p.Kcal)
+		byZone[p.HeartRateZone] += int64(p.ActiveZoneMinutes)
 	}
+
 	dayStr := dayKey(day)
-	for zone, kcal := range byZone {
-		if _, err := s.DB.ExecContext(ctx, `
-			INSERT INTO watch_calories_by_zone (day, zone_type, kcal)
-			VALUES (?, ?, ?)
-			ON CONFLICT(day, zone_type) DO UPDATE SET kcal = excluded.kcal
-		`, dayStr, zone, kcal); err != nil {
-			return false, fmt.Errorf("upserting calories by zone: %w", err)
+	rows := make([]healthdata.ActiveZoneMinutesByZone, 0, len(byZone))
+	for zone, minutes := range byZone {
+		rows = append(rows, healthdata.ActiveZoneMinutesByZone{Day: dayStr, ZoneType: zone, Minutes: minutes})
+	}
+	if err := s.upsertActiveZoneMinutesByZone(ctx, dayStr, rows); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// syncActivityLevelSegments upserts the day's sedentary/lightly-active/
+// moderately-active/very-active spans (from activity-level) — kept as a
+// SegmentTimeline (one row per raw interval Google returns) rather than
+// merged into coarser blocks: the point of this metric is exactly when
+// each level occurred, and Google's own interval boundaries already are
+// that answer without us re-deriving it.
+func (s *DBSyncer) syncActivityLevelSegments(ctx context.Context, day time.Time) (bool, error) {
+	points, err := fetchIntervalPoints[ActivityLevel](ctx, s.Client, "activity-level", day)
+	if err != nil {
+		return false, err
+	}
+	if len(points) == 0 {
+		return false, nil
+	}
+
+	dayStr := dayKey(day)
+	rows := make([]healthdata.ActivityLevelSegment, 0, len(points))
+	for _, p := range points {
+		start, errS := p.Interval.Start()
+		end, errE := p.Interval.End()
+		if errS != nil || errE != nil {
+			continue
 		}
+		rows = append(rows, healthdata.ActivityLevelSegment{Day: dayStr, Level: p.ActivityLevelType, StartTime: start, EndTime: end})
+	}
+	if len(rows) == 0 {
+		return false, nil
+	}
+	if err := s.upsertActivityLevelSegments(ctx, dayStr, rows); err != nil {
+		return false, err
 	}
 	return true, nil
 }
@@ -373,76 +398,103 @@ func (s *DBSyncer) syncRespiratoryRateSleepSummary(ctx context.Context, day time
 			return false, fmt.Errorf("finding sleep session for respiratory rate sample: %w", err)
 		}
 
-		if _, err := s.DB.ExecContext(ctx, `
-			UPDATE watch_sleep_session SET
-				deep_resp_rate_bpm  = ?,
-				light_resp_rate_bpm = ?,
-				rem_resp_rate_bpm   = ?,
-				full_resp_rate_bpm  = ?
-			WHERE id = ?
-		`, float64(p.DeepSleepStats.BreathsPerMinute), float64(p.LightSleepStats.BreathsPerMinute),
-			float64(p.RemSleepStats.BreathsPerMinute), float64(p.FullSleepStats.BreathsPerMinute), sessionID); err != nil {
-			return false, fmt.Errorf("updating sleep session respiratory rate: %w", err)
+		deep, light := float64(p.DeepSleepStats.BreathsPerMinute), float64(p.LightSleepStats.BreathsPerMinute)
+		rem, full := float64(p.RemSleepStats.BreathsPerMinute), float64(p.FullSleepStats.BreathsPerMinute)
+		if err := s.updateSleepSessionRespiratoryRate(ctx, sessionID, &deep, &light, &rem, &full); err != nil {
+			return false, err
 		}
 		found = true
 	}
 	return found, nil
 }
 
-// syncBloodGlucose caches every blood-glucose sample for the day in full
-// (low volume, clinically precise readings — kept as-is rather than
-// day-summarized, same reasoning as watch_heart_rate_intraday but without
-// the pruning since this account has never returned any).
-func (s *DBSyncer) syncBloodGlucose(ctx context.Context, day time.Time) (bool, error) {
+// syncBloodGlucose fetches the day's blood-glucose samples once, caches
+// them in full into watch_blood_glucose_sample (Timeline shape — *when* a
+// reading happened matters, e.g. relative to meals), and returns the day's
+// avg/min/max for watch_daily_summary — computed from this same fetch
+// rather than a separate query.
+func (s *DBSyncer) syncBloodGlucose(ctx context.Context, day time.Time) (found bool, avg, min, max *float64, err error) {
 	points, err := fetchSamplePoints[BloodGlucose](ctx, s.Client, "blood-glucose", day)
 	if err != nil {
-		return false, err
+		return false, nil, nil, nil, err
 	}
 	if len(points) == 0 {
-		return false, nil
+		return false, nil, nil, nil, nil
 	}
+
+	rows := make([]healthdata.BloodGlucoseSample, 0, len(points))
+	var sum, lo, hi float64
+	first := true
 	for _, p := range points {
-		t, err := p.SampleTime.Time()
-		if err != nil {
+		t, terr := p.SampleTime.Time()
+		if terr != nil {
 			continue
 		}
-		if _, err := s.DB.ExecContext(ctx, `
-			INSERT INTO watch_blood_glucose_sample (recorded_at, mg_dl, measurement_source, measurement_timing, meal_type, specimen)
-			VALUES (?, ?, ?, ?, ?, ?)
-			ON CONFLICT(recorded_at) DO UPDATE SET
-				mg_dl = excluded.mg_dl, measurement_source = excluded.measurement_source,
-				measurement_timing = excluded.measurement_timing, meal_type = excluded.meal_type, specimen = excluded.specimen
-		`, t.Format(time.RFC3339), float64(p.BloodGlucoseMilligramsPerDeciliter), p.MeasurementSource, p.MeasurementTiming, p.MealType, p.Specimen); err != nil {
-			return false, fmt.Errorf("upserting blood glucose sample: %w", err)
+		v := float64(p.BloodGlucoseMilligramsPerDeciliter)
+		rows = append(rows, healthdata.BloodGlucoseSample{
+			RecordedAt: t, MgDl: v,
+			MeasurementSource: p.MeasurementSource, MeasurementTiming: p.MeasurementTiming,
+			MealType: p.MealType, Specimen: p.Specimen,
+		})
+		sum += v
+		if first || v < lo {
+			lo = v
 		}
+		if first || v > hi {
+			hi = v
+		}
+		first = false
 	}
-	return true, nil
+	if len(rows) == 0 {
+		return false, nil, nil, nil, nil
+	}
+	if err := s.upsertBloodGlucoseSamples(ctx, rows); err != nil {
+		return false, nil, nil, nil, err
+	}
+
+	a := sum / float64(len(rows))
+	return true, &a, &lo, &hi, nil
 }
 
-// syncCoreBodyTemperature caches every core-body-temperature sample for the
-// day in full — same reasoning as syncBloodGlucose.
-func (s *DBSyncer) syncCoreBodyTemperature(ctx context.Context, day time.Time) (bool, error) {
+// syncCoreBodyTemperature is syncBloodGlucose's exact counterpart for
+// core-body-temperature.
+func (s *DBSyncer) syncCoreBodyTemperature(ctx context.Context, day time.Time) (found bool, avg, min, max *float64, err error) {
 	points, err := fetchSamplePoints[CoreBodyTemperature](ctx, s.Client, "core-body-temperature", day)
 	if err != nil {
-		return false, err
+		return false, nil, nil, nil, err
 	}
 	if len(points) == 0 {
-		return false, nil
+		return false, nil, nil, nil, nil
 	}
+
+	rows := make([]healthdata.CoreBodyTemperatureSample, 0, len(points))
+	var sum, lo, hi float64
+	first := true
 	for _, p := range points {
-		t, err := p.SampleTime.Time()
-		if err != nil {
+		t, terr := p.SampleTime.Time()
+		if terr != nil {
 			continue
 		}
-		if _, err := s.DB.ExecContext(ctx, `
-			INSERT INTO watch_core_body_temperature_sample (recorded_at, celsius, measurement_location)
-			VALUES (?, ?, ?)
-			ON CONFLICT(recorded_at) DO UPDATE SET celsius = excluded.celsius, measurement_location = excluded.measurement_location
-		`, t.Format(time.RFC3339), float64(p.TemperatureCelsius), p.MeasurementLocation); err != nil {
-			return false, fmt.Errorf("upserting core body temperature sample: %w", err)
+		v := float64(p.TemperatureCelsius)
+		rows = append(rows, healthdata.CoreBodyTemperatureSample{RecordedAt: t, Celsius: v, MeasurementLocation: p.MeasurementLocation})
+		sum += v
+		if first || v < lo {
+			lo = v
 		}
+		if first || v > hi {
+			hi = v
+		}
+		first = false
 	}
-	return true, nil
+	if len(rows) == 0 {
+		return false, nil, nil, nil, nil
+	}
+	if err := s.upsertCoreBodyTemperatureSamples(ctx, rows); err != nil {
+		return false, nil, nil, nil, err
+	}
+
+	a := sum / float64(len(rows))
+	return true, &a, &lo, &hi, nil
 }
 
 // syncStepsHourly buckets the day's step intervals by local hour into
@@ -466,43 +518,58 @@ func (s *DBSyncer) syncStepsHourly(ctx context.Context, day time.Time) (bool, er
 	}
 
 	dayStr := dayKey(day)
+	rows := make([]healthdata.HourlySteps, 0, len(hourly))
 	for hour, steps := range hourly {
-		if _, err := s.DB.ExecContext(ctx, `
-			INSERT INTO watch_steps_hourly (day, hour, steps)
-			VALUES (?, ?, ?)
-			ON CONFLICT(day, hour) DO UPDATE SET steps = excluded.steps
-		`, dayStr, hour, steps); err != nil {
-			return false, fmt.Errorf("upserting watch_steps_hourly: %w", err)
-		}
+		steps := steps
+		rows = append(rows, healthdata.HourlySteps{Day: dayStr, Hour: hour, Steps: &steps})
+	}
+	if err := s.upsertHourlySteps(ctx, rows); err != nil {
+		return false, err
 	}
 	return true, nil
 }
 
-// syncHeartRateIntraday caches the day's raw heart-rate samples into
-// watch_heart_rate_intraday — a rolling cache, not the source of truth
-// for history (see the table's comment in internal/db/schema.sql).
-func (s *DBSyncer) syncHeartRateIntraday(ctx context.Context, day time.Time) (bool, error) {
+// syncHeartRateIntraday fetches the day's raw heart-rate samples once,
+// caches them into watch_heart_rate_intraday (a rolling cache, not the
+// source of truth for history — see the table's comment in
+// internal/db/schema.sql), and returns the day's min/avg/max for
+// watch_daily_summary — computed from this same fetch rather than a
+// second API call.
+func (s *DBSyncer) syncHeartRateIntraday(ctx context.Context, day time.Time) (found bool, min, max, avg *float64, err error) {
 	points, err := fetchSamplePoints[HeartRate](ctx, s.Client, "heart-rate", day)
 	if err != nil {
-		return false, err
+		return false, nil, nil, nil, err
 	}
 	if len(points) == 0 {
-		return false, nil
+		return false, nil, nil, nil, nil
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	rows := make([]healthdata.HeartRateSample, 0, len(points))
+	var sum, lo, hi float64
+	first := true
 	for _, p := range points {
-		t, err := p.SampleTime.Time()
-		if err != nil {
+		t, terr := p.SampleTime.Time()
+		if terr != nil {
 			continue
 		}
-		if _, err := s.DB.ExecContext(ctx, `
-			INSERT INTO watch_heart_rate_intraday (recorded_at, bpm, cached_at)
-			VALUES (?, ?, ?)
-			ON CONFLICT(recorded_at) DO UPDATE SET bpm = excluded.bpm, cached_at = excluded.cached_at
-		`, t.Format(time.RFC3339), float64(p.BeatsPerMinute), now); err != nil {
-			return false, fmt.Errorf("upserting watch_heart_rate_intraday: %w", err)
+		v := float64(p.BeatsPerMinute)
+		rows = append(rows, healthdata.HeartRateSample{RecordedAt: t, Bpm: v})
+		sum += v
+		if first || v < lo {
+			lo = v
 		}
+		if first || v > hi {
+			hi = v
+		}
+		first = false
 	}
-	return true, nil
+	if len(rows) == 0 {
+		return false, nil, nil, nil, nil
+	}
+	if err := s.upsertHeartRateSamples(ctx, rows); err != nil {
+		return false, nil, nil, nil, err
+	}
+
+	a := sum / float64(len(rows))
+	return true, &lo, &hi, &a, nil
 }

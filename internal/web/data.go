@@ -8,93 +8,82 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sdhungan/Personal-Health-Data/internal/healthdata"
 	"github.com/sdhungan/Personal-Health-Data/internal/web/views"
 )
 
 const dateLayout = "2006-01-02"
 const stepGoal = 10000.0
 
-// dailySummaryRow mirrors watch_daily_summary's nullable columns — a
-// day with no row yet (never synced) or with gaps (a given metric wasn't
-// available) both come back as a zero-value row with every field invalid,
-// rather than an error; tiles render their "no data" state for that.
-type dailySummaryRow struct {
-	StepsTotal             sql.NullInt64
-	DistanceM              sql.NullFloat64
-	FloorsClimbed          sql.NullInt64
-	AltitudeGainM          sql.NullFloat64
-	SedentaryMinutes       sql.NullInt64
-	ActiveMinutes          sql.NullInt64
-	KcalBurnedGoogle       sql.NullFloat64
-	ActiveEnergyBurnedKcal sql.NullFloat64
-	RestingHeartRateBpm    sql.NullFloat64
-	HeartRateAvgBpm        sql.NullFloat64
-	HrvAvgMs               sql.NullFloat64
-	Vo2Max                 sql.NullFloat64
-	Vo2MaxSample           sql.NullFloat64
-	Vo2MaxRunSample        sql.NullFloat64
-	Spo2AvgPct             sql.NullFloat64
-	RespiratoryRateAvgBpm  sql.NullFloat64
-	SleepDurationMinutes   sql.NullInt64
-	// Populated only by fetchDailySummaryRow (today's tile value), not
-	// fetch7DayRows — these come from separate sample tables this account
-	// has never returned data for, so a 7-day sparkline for them would
-	// always be empty anyway; see fetchLastSampleOfDay.
-	BloodGlucoseMgDl sql.NullFloat64
-	CoreBodyTempC    sql.NullFloat64
-}
-
+// dailySummaryColumns lists watch_daily_summary's columns in the exact
+// order scanDailySummaryRow reads them, matching healthdata.DailySummary's
+// field order — see that type's doc comment for why every field is a
+// plain pointer: database/sql scans NULL into a nil *T and a real value
+// into an allocated one when the destination is **T (confirmed against
+// modernc.org/sqlite), so this reads straight into the same struct the
+// sync job writes, no intermediate sql.Null* type needed.
 const dailySummaryColumns = `steps_total, distance_m, floors_climbed, altitude_gain_m, sedentary_minutes, active_minutes,
-	       kcal_burned_google, active_energy_burned_kcal, resting_heart_rate_bpm, heart_rate_avg_bpm,
-	       hrv_avg_ms, vo2_max, vo2_max_sample, vo2_max_run_sample, spo2_avg_pct, respiratory_rate_avg_bpm, sleep_duration_minutes`
+	kcal_burned_google, active_energy_burned_kcal,
+	resting_heart_rate_bpm, heart_rate_min_bpm, heart_rate_max_bpm, heart_rate_avg_bpm, hrv_avg_ms,
+	vo2_max, vo2_max_sample, vo2_max_run_sample,
+	spo2_avg_pct, spo2_min_pct, respiratory_rate_avg_bpm,
+	blood_glucose_avg_mg_dl, blood_glucose_min_mg_dl, blood_glucose_max_mg_dl,
+	core_body_temperature_avg_c, core_body_temperature_min_c, core_body_temperature_max_c,
+	sleep_duration_minutes, sleep_temperature_c, sleep_temperature_baseline_c, sleep_temperature_deviation_30d_c`
 
-func scanDailySummaryRow(row *dailySummaryRow) []any {
-	return []any{&row.StepsTotal, &row.DistanceM, &row.FloorsClimbed, &row.AltitudeGainM, &row.SedentaryMinutes, &row.ActiveMinutes,
-		&row.KcalBurnedGoogle, &row.ActiveEnergyBurnedKcal, &row.RestingHeartRateBpm, &row.HeartRateAvgBpm,
-		&row.HrvAvgMs, &row.Vo2Max, &row.Vo2MaxSample, &row.Vo2MaxRunSample, &row.Spo2AvgPct, &row.RespiratoryRateAvgBpm, &row.SleepDurationMinutes}
+// dashboardDailyRow is web's own composite view of one day, spanning both
+// data sources: healthdata.DailySummary (Google Health) embedded directly,
+// plus the Cronometer macros the dashboard also shows as stat tiles. This
+// composite lives here, not in internal/healthdata, since "one day's
+// dashboard row" is a web-layer concept that legitimately spans sources —
+// healthdata.DailySummary itself stays Google-Health-only, matching
+// internal/cronometer's own domain (NutritionAmounts etc.) staying
+// Cronometer-only.
+type dashboardDailyRow struct {
+	healthdata.DailySummary
+	NutritionEnergyKcal *float64
+	NutritionProteinG   *float64
+	NutritionCarbsG     *float64
+	NutritionFatG       *float64
 }
 
-func fetchDailySummaryRow(ctx context.Context, db *sql.DB, day string) (dailySummaryRow, error) {
-	var r dailySummaryRow
+func scanDailySummaryRow(row *healthdata.DailySummary) []any {
+	return []any{
+		&row.StepsTotal, &row.DistanceM, &row.FloorsClimbed, &row.AltitudeGainM, &row.SedentaryMinutes, &row.ActiveMinutesTotal,
+		&row.KcalBurnedGoogle, &row.ActiveEnergyBurnedKcal,
+		&row.RestingHeartRateBpm, &row.HeartRateMinBpm, &row.HeartRateMaxBpm, &row.HeartRateAvgBpm, &row.HrvAvgMs,
+		&row.Vo2Max, &row.Vo2MaxSample, &row.Vo2MaxRunSample,
+		&row.Spo2AvgPct, &row.Spo2MinPct, &row.RespiratoryRateAvgBpm,
+		&row.BloodGlucoseAvgMgDl, &row.BloodGlucoseMinMgDl, &row.BloodGlucoseMaxMgDl,
+		&row.CoreBodyTemperatureAvgC, &row.CoreBodyTemperatureMinC, &row.CoreBodyTemperatureMaxC,
+		&row.SleepDurationMinutes, &row.SleepTemperatureC, &row.SleepTemperatureBaselineC, &row.SleepTemperatureDeviation30dC,
+	}
+}
+
+// fetchDailySummaryRow loads day's watch_daily_summary row (zero-value if
+// none yet — every field nil, tiles render their "no data" state for
+// that) plus cronometer_daily_nutrition's macros, merged onto the same
+// struct since a day can have nutrition data with no watch_daily_summary
+// row at all (food logged, watch never synced).
+func fetchDailySummaryRow(ctx context.Context, db *sql.DB, day string) (dashboardDailyRow, error) {
+	r := dashboardDailyRow{DailySummary: healthdata.DailySummary{Day: day}}
 	err := db.QueryRowContext(ctx, `SELECT `+dailySummaryColumns+` FROM watch_daily_summary WHERE day = ?`, day).
-		Scan(scanDailySummaryRow(&r)...)
+		Scan(scanDailySummaryRow(&r.DailySummary)...)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return r, fmt.Errorf("querying watch_daily_summary for %s: %w", day, err)
 	}
 
-	if dayTime, perr := time.ParseInLocation(dateLayout, day, time.Local); perr == nil {
-		v, err := fetchLastSampleOfDay(ctx, db, dayTime, "watch_blood_glucose_sample", "mg_dl")
-		if err != nil {
-			return r, err
-		}
-		r.BloodGlucoseMgDl = v
-		v, err = fetchLastSampleOfDay(ctx, db, dayTime, "watch_core_body_temperature_sample", "celsius")
-		if err != nil {
-			return r, err
-		}
-		r.CoreBodyTempC = v
+	err = db.QueryRowContext(ctx, `SELECT energy_kcal, protein_g, carbs_g, fat_g FROM cronometer_daily_nutrition WHERE day = ?`, day).
+		Scan(&r.NutritionEnergyKcal, &r.NutritionProteinG, &r.NutritionCarbsG, &r.NutritionFatG)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return r, fmt.Errorf("querying cronometer_daily_nutrition for %s: %w", day, err)
 	}
 	return r, nil
 }
 
-// fetchLastSampleOfDay returns the most recent value of column in table
-// (a recorded_at-keyed sample table) falling within day's local calendar
-// date. table/column are always one of a fixed set of internal string
-// literals this file controls, never request input.
-func fetchLastSampleOfDay(ctx context.Context, db *sql.DB, day time.Time, table, column string) (sql.NullFloat64, error) {
-	var v sql.NullFloat64
-	startUTC, endUTC := localDayRangeUTC(day)
-	query := fmt.Sprintf(`SELECT %s FROM %s WHERE recorded_at >= ? AND recorded_at < ? ORDER BY recorded_at DESC LIMIT 1`, column, table)
-	err := db.QueryRowContext(ctx, query, startUTC, endUTC).Scan(&v)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return v, fmt.Errorf("querying latest %s.%s for %s: %w", table, column, day.Format(dateLayout), err)
-	}
-	return v, nil
-}
-
 // fetch7DayRows returns a day->row map for the 7 days ending on endDay
 // (inclusive), missing days simply absent from the map.
-func fetch7DayRows(ctx context.Context, db *sql.DB, endDay time.Time) (map[string]dailySummaryRow, error) {
+func fetch7DayRows(ctx context.Context, db *sql.DB, endDay time.Time) (map[string]dashboardDailyRow, error) {
 	start := endDay.AddDate(0, 0, -6).Format(dateLayout)
 	end := endDay.Format(dateLayout)
 
@@ -104,28 +93,70 @@ func fetch7DayRows(ctx context.Context, db *sql.DB, endDay time.Time) (map[strin
 	}
 	defer rows.Close()
 
-	out := map[string]dailySummaryRow{}
+	out := map[string]dashboardDailyRow{}
 	for rows.Next() {
 		var day string
-		var r dailySummaryRow
+		var r healthdata.DailySummary
 		dest := append([]any{&day}, scanDailySummaryRow(&r)...)
 		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("scanning watch_daily_summary row: %w", err)
 		}
+		r.Day = day
+		out[day] = dashboardDailyRow{DailySummary: r}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Merged in by day key, not a JOIN — a day can have nutrition data with
+	// no watch_daily_summary row at all (food logged, watch never synced),
+	// and this must not silently drop that day.
+	nutRows, err := db.QueryContext(ctx, `SELECT day, energy_kcal, protein_g, carbs_g, fat_g FROM cronometer_daily_nutrition WHERE day BETWEEN ? AND ?`, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("querying 7-day cronometer_daily_nutrition range: %w", err)
+	}
+	defer nutRows.Close()
+	for nutRows.Next() {
+		var day string
+		var energy, protein, carbs, fat *float64
+		if err := nutRows.Scan(&day, &energy, &protein, &carbs, &fat); err != nil {
+			return nil, fmt.Errorf("scanning cronometer_daily_nutrition row: %w", err)
+		}
+		r := out[day]
+		r.Day = day
+		r.NutritionEnergyKcal, r.NutritionProteinG, r.NutritionCarbsG, r.NutritionFatG = energy, protein, carbs, fat
 		out[day] = r
 	}
-	return out, rows.Err()
+	return out, nutRows.Err()
+}
+
+// fromInt64/fromFloat64 adapt healthdata.DailySummary's *int64/*float64
+// fields to metricDef.Extract's (float64, bool) shape — nil means "not
+// found for this day" (false), same convention the sync layer's pointer
+// fields already use.
+func fromInt64(p *int64) (float64, bool) {
+	if p == nil {
+		return 0, false
+	}
+	return float64(*p), true
+}
+
+func fromFloat64(p *float64) (float64, bool) {
+	if p == nil {
+		return 0, false
+	}
+	return *p, true
 }
 
 // metricDef describes one stat-tile's data: how to pull today's value and
-// a 7-day series out of a dailySummaryRow, and how to format it.
+// a 7-day series out of a healthdata.DailySummary, and how to format it.
 type metricDef struct {
 	Title    string
 	Icon     string
 	Category string // dashboard section: "activity", "heart", "respiratory", "sleep"
 	Unit     string
 	EmptyMsg string
-	Extract  func(dailySummaryRow) (float64, bool)
+	Extract  func(dashboardDailyRow) (float64, bool)
 	Format   func(float64) string
 }
 
@@ -136,76 +167,71 @@ func fmtNoDec(v float64) string  { return fmt.Sprintf("%.0f", v) }
 var metricDefs = map[string]metricDef{
 	"steps": {
 		Title: "Steps", Icon: "steps", Category: "activity", Unit: "steps", EmptyMsg: "No steps recorded",
-		Extract: func(r dailySummaryRow) (float64, bool) { return float64(r.StepsTotal.Int64), r.StepsTotal.Valid },
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromInt64(r.StepsTotal) },
 		Format:  fmtInt,
 	},
 	"calories": {
 		Title: "Calories (Google)", Icon: "flame", Category: "activity", Unit: "kcal", EmptyMsg: "No calories to eat",
-		Extract: func(r dailySummaryRow) (float64, bool) { return r.KcalBurnedGoogle.Float64, r.KcalBurnedGoogle.Valid },
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.KcalBurnedGoogle) },
 		Format:  fmtNoDec,
 	},
 	"active_energy": {
 		Title: "Active Energy", Icon: "flame", Category: "activity", Unit: "kcal", EmptyMsg: "No active energy data",
-		Extract: func(r dailySummaryRow) (float64, bool) {
-			return r.ActiveEnergyBurnedKcal.Float64, r.ActiveEnergyBurnedKcal.Valid
-		},
-		Format: fmtNoDec,
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.ActiveEnergyBurnedKcal) },
+		Format:  fmtNoDec,
 	},
 	"distance": {
 		Title: "Distance", Icon: "pin", Category: "activity", Unit: "km", EmptyMsg: "No distance recorded",
-		Extract: func(r dailySummaryRow) (float64, bool) { return r.DistanceM.Float64 / 1000, r.DistanceM.Valid },
-		Format:  fmtOneDec,
+		Extract: func(r dashboardDailyRow) (float64, bool) {
+			v, ok := fromFloat64(r.DistanceM)
+			return v / 1000, ok
+		},
+		Format: fmtOneDec,
 	},
 	"floors": {
 		Title: "Floors", Icon: "stairs", Category: "activity", Unit: "floors", EmptyMsg: "No floor data",
-		Extract: func(r dailySummaryRow) (float64, bool) { return float64(r.FloorsClimbed.Int64), r.FloorsClimbed.Valid },
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromInt64(r.FloorsClimbed) },
 		Format:  fmtInt,
 	},
 	"altitude": {
 		Title: "Altitude Gain", Icon: "mountain", Category: "activity", Unit: "m", EmptyMsg: "No altitude data",
-		Extract: func(r dailySummaryRow) (float64, bool) { return r.AltitudeGainM.Float64, r.AltitudeGainM.Valid },
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.AltitudeGainM) },
 		Format:  fmtNoDec,
 	},
 	"active_minutes": {
 		Title: "Active minutes", Icon: "bolt", Category: "activity", Unit: "min", EmptyMsg: "No active minutes recorded",
-		Extract: func(r dailySummaryRow) (float64, bool) { return float64(r.ActiveMinutes.Int64), r.ActiveMinutes.Valid },
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromInt64(r.ActiveMinutesTotal) },
 		Format:  fmtInt,
 	},
 	"sedentary": {
 		Title: "Sedentary Time", Icon: "chair", Category: "activity", Unit: "", EmptyMsg: "No sedentary time data",
-		Extract: func(r dailySummaryRow) (float64, bool) {
-			return float64(r.SedentaryMinutes.Int64), r.SedentaryMinutes.Valid
-		},
-		Format: func(v float64) string { return views.FormatMinutes(int64(v)) },
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromInt64(r.SedentaryMinutes) },
+		Format:  func(v float64) string { return views.FormatMinutes(int64(v)) },
 	},
 	"heart_rate": {
 		Title: "Heart rate", Icon: "heart", Category: "heart", Unit: "bpm avg", EmptyMsg: "No heart rate data",
-		Extract: func(r dailySummaryRow) (float64, bool) { return r.HeartRateAvgBpm.Float64, r.HeartRateAvgBpm.Valid },
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.HeartRateAvgBpm) },
 		Format:  fmtNoDec,
 	},
 	"resting_hr": {
 		Title: "Resting heart rate", Icon: "heart", Category: "heart", Unit: "bpm", EmptyMsg: "No resting heart rate data",
-		Extract: func(r dailySummaryRow) (float64, bool) {
-			return r.RestingHeartRateBpm.Float64, r.RestingHeartRateBpm.Valid
-		},
-		Format: fmtNoDec,
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.RestingHeartRateBpm) },
+		Format:  fmtNoDec,
 	},
 	"hrv": {
 		Title: "Heart rate variability", Icon: "heart", Category: "heart", Unit: "ms", EmptyMsg: "No HRV data",
-		Extract: func(r dailySummaryRow) (float64, bool) { return r.HrvAvgMs.Float64, r.HrvAvgMs.Valid },
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.HrvAvgMs) },
 		Format:  fmtOneDec,
 	},
 	"spo2": {
 		Title: "Blood oxygen", Icon: "drop", Category: "respiratory", Unit: "% SpO2", EmptyMsg: "No SpO2 data",
-		Extract: func(r dailySummaryRow) (float64, bool) { return r.Spo2AvgPct.Float64, r.Spo2AvgPct.Valid },
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.Spo2AvgPct) },
 		Format:  fmtOneDec,
 	},
 	"respiratory_rate": {
 		Title: "Respiratory rate", Icon: "lungs", Category: "respiratory", Unit: "breaths/min", EmptyMsg: "No respiratory rate data",
-		Extract: func(r dailySummaryRow) (float64, bool) {
-			return r.RespiratoryRateAvgBpm.Float64, r.RespiratoryRateAvgBpm.Valid
-		},
-		Format: fmtOneDec,
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.RespiratoryRateAvgBpm) },
+		Format:  fmtOneDec,
 	},
 	"vo2max": {
 		// Prefers the daily aggregate (daily-vo2-max) but falls back to
@@ -213,36 +239,51 @@ var metricDefs = map[string]metricDef{
 		// for the day — three different upstream sources for the same
 		// underlying concept, kept as one tile rather than three.
 		Title: "VO2 max", Icon: "lungs", Category: "respiratory", Unit: "ml/kg/min", EmptyMsg: "No VO2 max data",
-		Extract: func(r dailySummaryRow) (float64, bool) {
-			if r.Vo2Max.Valid {
-				return r.Vo2Max.Float64, true
+		Extract: func(r dashboardDailyRow) (float64, bool) {
+			if v, ok := fromFloat64(r.Vo2Max); ok {
+				return v, true
 			}
-			if r.Vo2MaxSample.Valid {
-				return r.Vo2MaxSample.Float64, true
+			if v, ok := fromFloat64(r.Vo2MaxSample); ok {
+				return v, true
 			}
-			if r.Vo2MaxRunSample.Valid {
-				return r.Vo2MaxRunSample.Float64, true
-			}
-			return 0, false
+			return fromFloat64(r.Vo2MaxRunSample)
 		},
 		Format: fmtOneDec,
 	},
 	"blood_glucose": {
-		Title: "Blood Glucose", Icon: "drop", Category: "body", Unit: "mg/dL", EmptyMsg: "No blood glucose data",
-		Extract: func(r dailySummaryRow) (float64, bool) { return r.BloodGlucoseMgDl.Float64, r.BloodGlucoseMgDl.Valid },
+		Title: "Blood Glucose", Icon: "drop", Category: "body", Unit: "mg/dL avg", EmptyMsg: "No blood glucose data",
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.BloodGlucoseAvgMgDl) },
 		Format:  fmtNoDec,
 	},
 	"core_body_temp": {
-		Title: "Core Body Temp", Icon: "thermometer", Category: "body", Unit: "°C", EmptyMsg: "No core temperature data",
-		Extract: func(r dailySummaryRow) (float64, bool) { return r.CoreBodyTempC.Float64, r.CoreBodyTempC.Valid },
+		Title: "Core Body Temp", Icon: "thermometer", Category: "body", Unit: "°C avg", EmptyMsg: "No core temperature data",
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.CoreBodyTemperatureAvgC) },
 		Format:  fmtOneDec,
 	},
 	"sleep": {
 		Title: "Sleep", Icon: "moon", Category: "sleep", Unit: "", EmptyMsg: "No sleep recorded",
-		Extract: func(r dailySummaryRow) (float64, bool) {
-			return float64(r.SleepDurationMinutes.Int64), r.SleepDurationMinutes.Valid
-		},
-		Format: func(v float64) string { return views.FormatMinutes(int64(v)) },
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromInt64(r.SleepDurationMinutes) },
+		Format:  func(v float64) string { return views.FormatMinutes(int64(v)) },
+	},
+	"nutrition_energy": {
+		Title: "Energy (Cronometer)", Icon: "apple", Category: "nutrition", Unit: "kcal", EmptyMsg: "No food logged",
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.NutritionEnergyKcal) },
+		Format:  fmtNoDec,
+	},
+	"nutrition_protein": {
+		Title: "Protein", Icon: "apple", Category: "nutrition", Unit: "g", EmptyMsg: "No food logged",
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.NutritionProteinG) },
+		Format:  fmtNoDec,
+	},
+	"nutrition_carbs": {
+		Title: "Carbs", Icon: "apple", Category: "nutrition", Unit: "g", EmptyMsg: "No food logged",
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.NutritionCarbsG) },
+		Format:  fmtNoDec,
+	},
+	"nutrition_fat": {
+		Title: "Fat", Icon: "apple", Category: "nutrition", Unit: "g", EmptyMsg: "No food logged",
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.NutritionFatG) },
+		Format:  fmtNoDec,
 	},
 }
 
@@ -250,11 +291,13 @@ var metricDefs = map[string]metricDef{
 // deliberately first and pre-expanded — the reference dashboard's default
 // "steps, last 7 days" view.
 var DefaultTileKinds = []string{
-	"steps", "calories", "active_energy", "distance", "active_minutes", "floors", "altitude", "sedentary", "activities",
-	"heart_rate", "resting_hr", "hrv", "hr_zones",
+	"steps", "calories", "active_energy", "distance", "active_minutes", "active_minutes_by_level",
+	"floors", "altitude", "sedentary", "activity_level", "activities",
+	"heart_rate", "resting_hr", "hrv", "hr_zones", "active_zone_minutes_by_zone",
 	"body", "blood_glucose", "core_body_temp",
 	"sleep",
 	"spo2", "respiratory_rate", "vo2max",
+	"nutrition_energy", "nutrition_protein", "nutrition_carbs", "nutrition_fat", "food_log",
 }
 
 // buildStatTile builds one stat/sleep tile. Collapsed, every metric gets a
@@ -264,7 +307,7 @@ var DefaultTileKinds = []string{
 // another daily-average chart — everything else falls back to the 7-day
 // trend, since there's genuinely nothing finer stored for it (see
 // prerequisite.md).
-func buildStatTile(ctx context.Context, db *sql.DB, t views.TileData, kind string, day time.Time, expanded bool, today dailySummaryRow, history map[string]dailySummaryRow) (views.TileData, error) {
+func buildStatTile(ctx context.Context, db *sql.DB, t views.TileData, kind string, day time.Time, expanded bool, today dashboardDailyRow, history map[string]dashboardDailyRow) (views.TileData, error) {
 	def := metricDefs[kind]
 	t.Kind = views.TileKindStat
 	if kind == "sleep" {
@@ -418,7 +461,7 @@ func hourLabel(h int) string {
 // comment), a day outside that window legitimately has zero rows even
 // though the daily average is still known — that's reported as a distinct,
 // clearly labeled message rather than silently showing nothing.
-func fetchHeartRateDetail(ctx context.Context, db *sql.DB, day time.Time, today dailySummaryRow) (*views.DetailData, error) {
+func fetchHeartRateDetail(ctx context.Context, db *sql.DB, day time.Time, today dashboardDailyRow) (*views.DetailData, error) {
 	startUTC, endUTC := localDayRangeUTC(day)
 	rows, err := db.QueryContext(ctx, `
 		SELECT recorded_at, bpm FROM watch_heart_rate_intraday
@@ -458,7 +501,7 @@ func fetchHeartRateDetail(ctx context.Context, db *sql.DB, day time.Time, today 
 	}
 
 	if len(d.LineSamples) == 0 {
-		if today.HeartRateAvgBpm.Valid {
+		if today.HeartRateAvgBpm != nil {
 			d.Message = "Detailed heart rate is only cached for the last few days — showing the daily average only for older days."
 		} else {
 			d.Message = "No heart rate data for this day."
@@ -474,39 +517,40 @@ func fetchHeartRateDetail(ctx context.Context, db *sql.DB, day time.Time, today 
 	return d, nil
 }
 
-// buildHeartRateZonesTile builds the "Time in Zones" tile from
-// watch_heart_rate_zone_minutes — collapsed shows the day's total minutes
-// across all zones, expanded reuses the same proportional segmented-bar
-// renderer built for sleep stages (views.DetailData{Kind:"stages"}), just
-// with zone-type segments sized by relative minutes instead of
-// chronological time.
-func buildHeartRateZonesTile(ctx context.Context, db *sql.DB, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
+// buildCategoryTile is the shared builder for every DailyByCategory metric
+// (see internal/db/schema.sql) — one row per (day, category) in table,
+// summed for the collapsed BigValue and shown as a proportional segmented
+// bar (same renderer sleep stages use) when expanded. Heart-rate zones,
+// active-minutes-by-level, and active-zone-minutes-by-zone all share this
+// one function instead of three near-identical copies.
+func buildCategoryTile(ctx context.Context, db *sql.DB, t views.TileData, day time.Time, expanded bool, table, categoryColumn, valueColumn, title, icon, category, unit, emptyMsg string, humanize func(string) string) (views.TileData, error) {
 	t.Kind = views.TileKindStat
-	t.Title = "Time in Zones"
-	t.Icon = "heart"
-	t.Category = "heart"
-	t.Unit = "min"
+	t.Title = title
+	t.Icon = icon
+	t.Category = category
+	t.Unit = unit
 
 	dayStr := day.Format(dateLayout)
-	rows, err := db.QueryContext(ctx, `SELECT zone_type, minutes FROM watch_heart_rate_zone_minutes WHERE day = ? ORDER BY minutes DESC`, dayStr)
+	query := fmt.Sprintf(`SELECT %s, %s FROM %s WHERE day = ? ORDER BY %s DESC`, categoryColumn, valueColumn, table, valueColumn)
+	rows, err := db.QueryContext(ctx, query, dayStr)
 	if err != nil {
-		return t, fmt.Errorf("querying watch_heart_rate_zone_minutes for %s: %w", dayStr, err)
+		return t, fmt.Errorf("querying %s for %s: %w", table, dayStr, err)
 	}
 	defer rows.Close()
 
-	type zoneMinutes struct {
-		Zone    string
-		Minutes float64
+	type categoryValue struct {
+		Category string
+		Value    float64
 	}
-	var zones []zoneMinutes
+	var cats []categoryValue
 	var total float64
 	for rows.Next() {
-		var z zoneMinutes
-		if err := rows.Scan(&z.Zone, &z.Minutes); err != nil {
-			return t, fmt.Errorf("scanning heart rate zone minutes: %w", err)
+		var c categoryValue
+		if err := rows.Scan(&c.Category, &c.Value); err != nil {
+			return t, fmt.Errorf("scanning %s row: %w", table, err)
 		}
-		zones = append(zones, z)
-		total += z.Minutes
+		cats = append(cats, c)
+		total += c.Value
 	}
 	if err := rows.Err(); err != nil {
 		return t, err
@@ -514,7 +558,7 @@ func buildHeartRateZonesTile(ctx context.Context, db *sql.DB, t views.TileData, 
 
 	if total <= 0 {
 		t.Empty = true
-		t.EmptyMsg = "No time-in-zone data"
+		t.EmptyMsg = emptyMsg
 		return t, nil
 	}
 	t.BigValue = fmtInt(total)
@@ -525,21 +569,140 @@ func buildHeartRateZonesTile(ctx context.Context, db *sql.DB, t views.TileData, 
 
 	d := &views.DetailData{Kind: "stages"}
 	cum := 0.0
-	for _, z := range zones {
+	for _, c := range cats {
 		start := cum / total
-		cum += z.Minutes
-		d.Stages = append(d.Stages, views.StageSegment{Type: z.Zone, StartPct: start, EndPct: cum / total})
-		d.Stats = append(d.Stats, views.StatItem{Label: humanizeZoneType(z.Zone), Value: views.FormatMinutes(int64(z.Minutes))})
+		cum += c.Value
+		d.Stages = append(d.Stages, views.StageSegment{Type: c.Category, StartPct: start, EndPct: cum / total})
+		d.Stats = append(d.Stats, views.StatItem{Label: humanize(c.Category), Value: views.FormatMinutes(int64(c.Value))})
 	}
 	t.Detail = d
 	return t, nil
+}
+
+// buildHeartRateZonesTile builds the "Time in Zones" tile from
+// watch_heart_rate_zone_minutes.
+func buildHeartRateZonesTile(ctx context.Context, db *sql.DB, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
+	return buildCategoryTile(ctx, db, t, day, expanded,
+		"watch_heart_rate_zone_minutes", "zone_type", "minutes",
+		"Time in Zones", "heart", "heart", "min", "No time-in-zone data", humanizeZoneType)
+}
+
+// buildActiveMinutesByLevelTile builds the active-minutes-by-activity-level
+// breakdown tile from watch_active_minutes_by_level — the light/moderate/
+// vigorous split behind the flat "Active minutes" total tile.
+func buildActiveMinutesByLevelTile(ctx context.Context, db *sql.DB, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
+	return buildCategoryTile(ctx, db, t, day, expanded,
+		"watch_active_minutes_by_level", "activity_level", "minutes",
+		"Active Minutes by Level", "bolt", "activity", "min", "No active minutes recorded", humanizeZoneType)
+}
+
+// buildActiveZoneMinutesByZoneTile builds the active-zone-minutes breakdown
+// tile from watch_active_zone_minutes_by_zone — this metric has no flat
+// total column (unlike active-minutes), the category breakdown is its only
+// representation (see internal/db/schema.sql).
+func buildActiveZoneMinutesByZoneTile(ctx context.Context, db *sql.DB, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
+	return buildCategoryTile(ctx, db, t, day, expanded,
+		"watch_active_zone_minutes_by_zone", "zone_type", "minutes",
+		"Active Zone Minutes", "heart", "heart", "min", "No active zone minutes data", humanizeZoneType)
 }
 
 func humanizeZoneType(zone string) string {
 	if zone == "" {
 		return zone
 	}
-	return strings.ToUpper(zone[:1]) + strings.ToLower(zone[1:])
+	words := strings.Split(strings.ToLower(zone), "_")
+	for i, w := range words {
+		if w == "" {
+			continue
+		}
+		words[i] = strings.ToUpper(w[:1]) + w[1:]
+	}
+	return strings.Join(words, " ")
+}
+
+// buildActivityLevelSegmentTile builds the activity-level tile from
+// watch_activity_level_segment — a SegmentTimeline (see
+// internal/db/schema.sql) spanning the whole day rather than a bounded
+// session like sleep stages: segments are positioned as fractions of the
+// full local calendar day (00:00-24:00), reusing the same proportional bar
+// renderer. Collapsed BigValue is non-sedentary time — the single number
+// most people actually want from this tile ("how much of today wasn't
+// spent sitting").
+func buildActivityLevelSegmentTile(ctx context.Context, db *sql.DB, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
+	t.Kind = views.TileKindStat
+	t.Title = "Activity Level"
+	t.Icon = "activity"
+	t.Category = "activity"
+	t.Unit = ""
+
+	dayStr := day.Format(dateLayout)
+	rows, err := db.QueryContext(ctx, `
+		SELECT activity_level, start_time, end_time FROM watch_activity_level_segment
+		WHERE day = ? ORDER BY start_time
+	`, dayStr)
+	if err != nil {
+		return t, fmt.Errorf("querying watch_activity_level_segment for %s: %w", dayStr, err)
+	}
+	defer rows.Close()
+
+	type segment struct {
+		Level          string
+		Start, End     time.Time
+		DurationMinute float64
+	}
+	var segments []segment
+	minutesByLevel := map[string]float64{}
+	var nonSedentaryMinutes float64
+	for rows.Next() {
+		var level, startStr, endStr string
+		if err := rows.Scan(&level, &startStr, &endStr); err != nil {
+			return t, fmt.Errorf("scanning watch_activity_level_segment row: %w", err)
+		}
+		start, e1 := time.Parse(time.RFC3339, startStr)
+		end, e2 := time.Parse(time.RFC3339, endStr)
+		if e1 != nil || e2 != nil || !end.After(start) {
+			continue
+		}
+		minutes := end.Sub(start).Minutes()
+		segments = append(segments, segment{Level: level, Start: start, End: end, DurationMinute: minutes})
+		minutesByLevel[level] += minutes
+		if level != "SEDENTARY" {
+			nonSedentaryMinutes += minutes
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return t, err
+	}
+
+	if len(segments) == 0 {
+		t.Empty = true
+		t.EmptyMsg = "No activity level data for this day"
+		return t, nil
+	}
+	t.BigValue = views.FormatMinutes(int64(nonSedentaryMinutes))
+	t.Subtext = "non-sedentary today"
+
+	if !expanded {
+		return t, nil
+	}
+
+	dayStart := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
+	daySpan := 24 * time.Hour
+	d := &views.DetailData{Kind: "stages", RangeLabel: "12:00 AM – 11:59 PM"}
+	for _, s := range segments {
+		d.Stages = append(d.Stages, views.StageSegment{
+			Type:     s.Level,
+			StartPct: s.Start.Sub(dayStart).Seconds() / daySpan.Seconds(),
+			EndPct:   s.End.Sub(dayStart).Seconds() / daySpan.Seconds(),
+		})
+	}
+	for _, level := range []string{"SEDENTARY", "LIGHTLY_ACTIVE", "MODERATELY_ACTIVE", "VERY_ACTIVE"} {
+		if m, ok := minutesByLevel[level]; ok {
+			d.Stats = append(d.Stats, views.StatItem{Label: humanizeZoneType(level), Value: views.FormatMinutes(int64(m))})
+		}
+	}
+	t.Detail = d
+	return t, nil
 }
 
 // fetchSleepDetail builds the sleep tile's expanded detail: the day's main
@@ -614,7 +777,7 @@ func fetchSleepDetail(ctx context.Context, db *sql.DB, day time.Time) (*views.De
 	return d, nil
 }
 
-func buildChart(day time.Time, history map[string]dailySummaryRow, extract func(dailySummaryRow) (float64, bool), goal *float64) *views.ChartData {
+func buildChart(day time.Time, history map[string]dashboardDailyRow, extract func(dashboardDailyRow) (float64, bool), goal *float64) *views.ChartData {
 	c := &views.ChartData{Goal: goal}
 	var total float64
 	any := false

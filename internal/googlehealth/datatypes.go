@@ -90,4 +90,10 @@ var RollUpDataTypes = []string{
 	"active-minutes",
 	"total-calories",
 	"floors",
+	// calories-in-heart-rate-zone: DOCUMENTED to support dailyRollUp (see
+	// values.go's CaloriesInHeartRateZoneRollup) — included here so a
+	// future DumpToday run captures a real response to confirm that
+	// struct's shape against, same discipline every other type here
+	// already follows.
+	"calories-in-heart-rate-zone",
 }

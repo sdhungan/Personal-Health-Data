@@ -106,7 +106,24 @@ func testDataResponses() map[string]string {
 			{"dataSource":{},"timeInHeartRateZone":{"interval":{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T10:30:00Z"},"heartRateZone":"MODERATE","durationMillis":"600000"}},
 			{"dataSource":{},"timeInHeartRateZone":{"interval":{"startTime":"2026-07-30T10:30:00Z","endTime":"2026-07-30T10:40:00Z"},"heartRateZone":"MODERATE","durationMillis":"300000"}}
 		]}`,
-		"list:calories-in-heart-rate-zone": `{"dataPoints":[{"dataSource":{},"caloriesInHeartRateZone":{"interval":{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T10:30:00Z"},"heartRateZone":"MODERATE","kcal":45.0}}]}`,
+		"rollup:calories-in-heart-rate-zone": `{"rollupDataPoints":[{"civilStartTime":{"date":{"year":2026,"month":7,"day":30}},"civilEndTime":{"date":{"year":2026,"month":7,"day":31}},"caloriesInHeartRateZone":{"caloriesInHeartRateZones":[{"heartRateZone":"MODERATE","kcal":45.0}]}}]}`,
+		"list:active-zone-minutes": `{"dataPoints":[
+			{"dataSource":{},"activeZoneMinutes":{"interval":{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T10:30:00Z"},"heartRateZone":"CARDIO","activeZoneMinutes":"15"}},
+			{"dataSource":{},"activeZoneMinutes":{"interval":{"startTime":"2026-07-30T11:00:00Z","endTime":"2026-07-30T11:15:00Z"},"heartRateZone":"CARDIO","activeZoneMinutes":"5"}},
+			{"dataSource":{},"activeZoneMinutes":{"interval":{"startTime":"2026-07-30T12:00:00Z","endTime":"2026-07-30T12:10:00Z"},"heartRateZone":"PEAK","activeZoneMinutes":"3"}}
+		]}`,
+		"list:activity-level": `{"dataPoints":[
+			{"dataSource":{},"activityLevel":{"interval":{"startTime":"2026-07-30T08:00:00Z","endTime":"2026-07-30T09:00:00Z"},"activityLevelType":"SEDENTARY"}},
+			{"dataSource":{},"activityLevel":{"interval":{"startTime":"2026-07-30T09:00:00Z","endTime":"2026-07-30T09:30:00Z"},"activityLevelType":"LIGHTLY_ACTIVE"}}
+		]}`,
+		"list:blood-glucose": `{"dataPoints":[
+			{"dataSource":{},"bloodGlucose":{"sampleTime":{"physicalTime":"2026-07-30T07:00:00Z"},"bloodGlucoseMilligramsPerDeciliter":95.0,"measurementTiming":"FASTING"}},
+			{"dataSource":{},"bloodGlucose":{"sampleTime":{"physicalTime":"2026-07-30T13:00:00Z"},"bloodGlucoseMilligramsPerDeciliter":115.0,"measurementTiming":"AFTER_MEAL"}}
+		]}`,
+		"list:core-body-temperature": `{"dataPoints":[
+			{"dataSource":{},"coreBodyTemperature":{"sampleTime":{"physicalTime":"2026-07-30T03:00:00Z"},"temperatureCelsius":36.5}},
+			{"dataSource":{},"coreBodyTemperature":{"sampleTime":{"physicalTime":"2026-07-30T06:00:00Z"},"temperatureCelsius":37.1}}
+		]}`,
 		"list:respiratory-rate-sleep-summary": `{"dataPoints":[{"dataSource":{},"respiratoryRateSleepSummary":{
 			"sampleTime":{"physicalTime":"2026-07-30T08:30:00Z"},
 			"deepSleepStats":{"breathsPerMinute":14.0},"lightSleepStats":{"breathsPerMinute":15.0},
@@ -165,23 +182,25 @@ func TestSyncDayFullDayPopulatesEveryTable(t *testing.T) {
 	}
 
 	// watch_daily_summary
-	var stepsTotal, activeMinutes, floorsClimbed, lightMin, moderateMin, vigorousMin, sedentaryMin int64
+	var stepsTotal, activeMinutes, floorsClimbed, sedentaryMin int64
 	var distanceM, kcalBurnedGoogle, restingHR, hrMin, hrMax, hrAvg, hrvAvg, spo2Avg, spo2Min, respRate float64
 	var altitudeGainM, activeEnergyKcal, vo2MaxSample, vo2MaxRunSample float64
 	var sleepTempC, sleepTempBaselineC float64
+	var bgAvg, bgMin, bgMax, cbtAvg, cbtMin, cbtMax float64
 	var sleepMinutes int64
 	err = db.QueryRow(`SELECT steps_total, distance_m, active_minutes, kcal_burned_google,
 		resting_heart_rate_bpm, heart_rate_min_bpm, heart_rate_max_bpm, heart_rate_avg_bpm,
 		hrv_avg_ms, spo2_avg_pct, spo2_min_pct, respiratory_rate_avg_bpm, sleep_duration_minutes,
-		floors_climbed, light_active_minutes, moderate_active_minutes, vigorous_active_minutes,
-		sedentary_minutes, altitude_gain_m, active_energy_burned_kcal, vo2_max_sample, vo2_max_run_sample,
-		sleep_temperature_c, sleep_temperature_baseline_c
+		floors_climbed, sedentary_minutes, altitude_gain_m, active_energy_burned_kcal, vo2_max_sample, vo2_max_run_sample,
+		sleep_temperature_c, sleep_temperature_baseline_c,
+		blood_glucose_avg_mg_dl, blood_glucose_min_mg_dl, blood_glucose_max_mg_dl,
+		core_body_temperature_avg_c, core_body_temperature_min_c, core_body_temperature_max_c
 		FROM watch_daily_summary WHERE day = '2026-07-30'`).
 		Scan(&stepsTotal, &distanceM, &activeMinutes, &kcalBurnedGoogle, &restingHR, &hrMin, &hrMax, &hrAvg,
 			&hrvAvg, &spo2Avg, &spo2Min, &respRate, &sleepMinutes,
-			&floorsClimbed, &lightMin, &moderateMin, &vigorousMin,
-			&sedentaryMin, &altitudeGainM, &activeEnergyKcal, &vo2MaxSample, &vo2MaxRunSample,
-			&sleepTempC, &sleepTempBaselineC)
+			&floorsClimbed, &sedentaryMin, &altitudeGainM, &activeEnergyKcal, &vo2MaxSample, &vo2MaxRunSample,
+			&sleepTempC, &sleepTempBaselineC,
+			&bgAvg, &bgMin, &bgMax, &cbtAvg, &cbtMin, &cbtMax)
 	if err != nil {
 		t.Fatalf("querying watch_daily_summary: %v", err)
 	}
@@ -218,9 +237,6 @@ func TestSyncDayFullDayPopulatesEveryTable(t *testing.T) {
 	if floorsClimbed != 8 {
 		t.Errorf("floors_climbed = %d, want 8", floorsClimbed)
 	}
-	if lightMin != 0 || moderateMin != 20 || vigorousMin != 10 {
-		t.Errorf("light/moderate/vigorous active minutes = %d/%d/%d, want 0/20/10", lightMin, moderateMin, vigorousMin)
-	}
 	if sedentaryMin != 90 {
 		t.Errorf("sedentary_minutes = %d, want 90", sedentaryMin)
 	}
@@ -238,6 +254,55 @@ func TestSyncDayFullDayPopulatesEveryTable(t *testing.T) {
 	}
 	if sleepTempC != 36.1 || sleepTempBaselineC != 36.4 {
 		t.Errorf("sleep temperature/baseline = %v/%v, want 36.1/36.4", sleepTempC, sleepTempBaselineC)
+	}
+	if bgAvg != 105 || bgMin != 95 || bgMax != 115 {
+		t.Errorf("blood glucose avg/min/max = %v/%v/%v, want 105/95/115", bgAvg, bgMin, bgMax)
+	}
+	if cbtAvg != 36.8 || cbtMin != 36.5 || cbtMax != 37.1 {
+		t.Errorf("core body temperature avg/min/max = %v/%v/%v, want 36.8/36.5/37.1", cbtAvg, cbtMin, cbtMax)
+	}
+
+	// watch_active_minutes_by_level / watch_active_zone_minutes_by_zone
+	var moderateActiveMin, vigorousActiveMin int64
+	if err := db.QueryRow(`SELECT minutes FROM watch_active_minutes_by_level WHERE day='2026-07-30' AND activity_level='MODERATE'`).Scan(&moderateActiveMin); err != nil {
+		t.Fatalf("querying watch_active_minutes_by_level (MODERATE): %v", err)
+	}
+	if err := db.QueryRow(`SELECT minutes FROM watch_active_minutes_by_level WHERE day='2026-07-30' AND activity_level='VIGOROUS'`).Scan(&vigorousActiveMin); err != nil {
+		t.Fatalf("querying watch_active_minutes_by_level (VIGOROUS): %v", err)
+	}
+	if moderateActiveMin != 20 || vigorousActiveMin != 10 {
+		t.Errorf("active minutes by level MODERATE/VIGOROUS = %d/%d, want 20/10", moderateActiveMin, vigorousActiveMin)
+	}
+	var cardioAZM, peakAZM int64
+	if err := db.QueryRow(`SELECT minutes FROM watch_active_zone_minutes_by_zone WHERE day='2026-07-30' AND zone_type='CARDIO'`).Scan(&cardioAZM); err != nil {
+		t.Fatalf("querying watch_active_zone_minutes_by_zone (CARDIO): %v", err)
+	}
+	if err := db.QueryRow(`SELECT minutes FROM watch_active_zone_minutes_by_zone WHERE day='2026-07-30' AND zone_type='PEAK'`).Scan(&peakAZM); err != nil {
+		t.Fatalf("querying watch_active_zone_minutes_by_zone (PEAK): %v", err)
+	}
+	if cardioAZM != 20 || peakAZM != 3 {
+		t.Errorf("active zone minutes by zone CARDIO/PEAK = %d/%d, want 20/3 (15+5 from two intervals / 3)", cardioAZM, peakAZM)
+	}
+
+	// watch_activity_level_segment
+	var segmentCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM watch_activity_level_segment WHERE day='2026-07-30'`).Scan(&segmentCount); err != nil {
+		t.Fatalf("counting watch_activity_level_segment: %v", err)
+	}
+	if segmentCount != 2 {
+		t.Errorf("activity level segment count = %d, want 2", segmentCount)
+	}
+
+	// watch_blood_glucose_sample / watch_core_body_temperature_sample
+	var bgSampleCount, cbtSampleCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM watch_blood_glucose_sample`).Scan(&bgSampleCount); err != nil {
+		t.Fatalf("counting watch_blood_glucose_sample: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM watch_core_body_temperature_sample`).Scan(&cbtSampleCount); err != nil {
+		t.Fatalf("counting watch_core_body_temperature_sample: %v", err)
+	}
+	if bgSampleCount != 2 || cbtSampleCount != 2 {
+		t.Errorf("blood glucose/core body temp sample counts = %d/%d, want 2/2", bgSampleCount, cbtSampleCount)
 	}
 
 	// watch_heart_rate_zone_definition / _minutes, watch_calories_by_zone
@@ -379,13 +444,18 @@ func TestSyncDayIsIdempotentOnRepeatedRuns(t *testing.T) {
 	}
 
 	for table, want := range map[string]int{
-		"watch_daily_summary":    1,
-		"watch_sleep_session":    1,
-		"watch_sleep_stage":      2,
-		"watch_exercise_session": 1,
-		"watch_ecg_reading":      1,
-		"body_measurement":       1,
-		"watch_steps_hourly":     2,
+		"watch_daily_summary":                1,
+		"watch_sleep_session":                1,
+		"watch_sleep_stage":                  2,
+		"watch_exercise_session":             1,
+		"watch_ecg_reading":                  1,
+		"body_measurement":                   1,
+		"watch_steps_hourly":                 2,
+		"watch_active_minutes_by_level":      2, // MODERATE, VIGOROUS
+		"watch_active_zone_minutes_by_zone":  2, // CARDIO, PEAK
+		"watch_activity_level_segment":       2,
+		"watch_blood_glucose_sample":         2,
+		"watch_core_body_temperature_sample": 2,
 	} {
 		var count int
 		if err := db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {

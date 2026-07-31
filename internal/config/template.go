@@ -21,11 +21,9 @@ google:
   credentials_file: ""
   callback_port: 9876
 
-# Cronometer login for the unofficial export API. This is a plain
-# username/password against Cronometer's own site, not OAuth.
-cronometer:
-  username: ""
-  password: ""
+# Cronometer credentials are not stored here -- run "healthd auth
+# cronometer" instead, which encrypts them at rest the same way the Google
+# OAuth token is protected.
 `
 
 // WriteTemplateIfMissing writes the starter config.yaml to path unless a

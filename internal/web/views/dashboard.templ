@@ -15,6 +15,7 @@ var tileSections = []struct{ Key, Title string }{
 	{"body", "Body Measurements"},
 	{"sleep", "Sleep"},
 	{"respiratory", "Respiratory"},
+	{"nutrition", "Nutrition"},
 }
 
 func tilesForCategory(tiles []TileData, category string) []TileData {
@@ -39,6 +40,9 @@ templ Dashboard(data DashboardData) {
 							@Tile(t, data.Day)
 						}
 					</div>
+					if section.Key == "nutrition" {
+						@CronometerAccountCard(data.CronometerConnected, data.CronometerMessage)
+					}
 				</section>
 			}
 		}
@@ -76,6 +80,8 @@ templ Tile(t TileData, day string) {
 					@activitiesTileBody(t)
 				case TileKindBody:
 					@bodyTileBody(t)
+				case TileKindFoodLog:
+					@foodLogTileBody(t)
 			}
 		</div>
 	</div>
@@ -85,7 +91,7 @@ func tileSizeClass(t TileData) string {
 	if (t.Kind == TileKindStat || t.Kind == TileKindSleep) && (t.Chart != nil || t.Detail != nil) {
 		return "tile-wide"
 	}
-	if t.Kind == TileKindActivities || t.Kind == TileKindBody {
+	if t.Kind == TileKindActivities || t.Kind == TileKindBody || t.Kind == TileKindFoodLog {
 		return "tile-wide"
 	}
 	return ""
@@ -186,6 +192,36 @@ func humanizeStageType(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + strings.ToLower(s[1:])
+}
+
+templ foodLogTileBody(t TileData) {
+	if len(t.FoodLog) == 0 {
+		<div class="tile-empty">No food logged</div>
+	} else {
+		<ul class="activity-list">
+			for _, s := range t.FoodLog {
+				<li>
+					<div class="activity-item">
+						<span class="activity-main">
+							<span class="activity-type">{ s.FoodName }</span>
+							<span class="activity-meta">
+								{ s.TimeLabel }
+								if s.QuantityLabel != "" {
+									&middot; { s.QuantityLabel }
+								}
+							</span>
+						</span>
+						<span class="activity-stats">
+							<span class="activity-stat">{ fmt.Sprintf("%.0f kcal", s.EnergyKcal) }</span>
+							if s.ProteinG != nil {
+								<span class="activity-stat">{ fmt.Sprintf("%.0fg protein", *s.ProteinG) }</span>
+							}
+						</span>
+					</div>
+				</li>
+			}
+		</ul>
+	}
 }
 
 templ activitiesTileBody(t TileData) {

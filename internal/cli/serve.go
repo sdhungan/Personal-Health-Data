@@ -89,7 +89,7 @@ func runServeForeground() error {
 		googleClient = gc
 	}
 
-	srv := web.New(store, googleClient)
+	srv := web.New(store, googleClient, key, appPaths.CronometerCredentialsFile(), appPaths.CronometerSessionFile())
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	fmt.Println("web dashboard listening on http://localhost" + addr)

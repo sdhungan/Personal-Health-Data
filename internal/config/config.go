@@ -1,6 +1,8 @@
 // Package config loads config.yaml (see ARCHITECTURE.md §4): ports, the
-// sync interval, and third-party client credentials the user must obtain
-// themselves (a Google Cloud OAuth client, Cronometer login).
+// sync interval, and the Google Cloud OAuth client the user must obtain
+// themselves. Cronometer credentials are deliberately not here — see
+// "healthd auth cronometer" — they go straight to an encrypted file, never
+// plaintext config.yaml.
 package config
 
 import (
@@ -12,10 +14,9 @@ import (
 
 // Config is the parsed contents of config.yaml, merged over Default().
 type Config struct {
-	Port                int              `yaml:"port"`
-	SyncIntervalMinutes int              `yaml:"sync_interval_minutes"`
-	Google              GoogleConfig     `yaml:"google"`
-	Cronometer          CronometerConfig `yaml:"cronometer"`
+	Port                int          `yaml:"port"`
+	SyncIntervalMinutes int          `yaml:"sync_interval_minutes"`
+	Google              GoogleConfig `yaml:"google"`
 }
 
 // GoogleConfig points at the OAuth client credentials for the Google
@@ -36,13 +37,6 @@ type GoogleConfig struct {
 	// port/path at redirect time, so this doesn't need to be registered
 	// anywhere — it just needs to stay free on this machine.
 	CallbackPort int `yaml:"callback_port"`
-}
-
-// CronometerConfig holds the (unofficial) Cronometer login used by the
-// reverse-engineered export client.
-type CronometerConfig struct {
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
 }
 
 // Default returns the configuration used when config.yaml is absent or a
