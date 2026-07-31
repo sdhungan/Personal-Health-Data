@@ -1,0 +1,90 @@
+package views
+
+templ Dashboard(data DashboardData) {
+	<div class="dashboard-grid" id="dashboard-grid">
+		for _, t := range data.Tiles {
+			@Tile(t, data.Day)
+		}
+	</div>
+}
+
+templ Tile(t TileData, day string) {
+	<div id={ t.ID } class={ "tile", templ.KV("tile-expanded", t.Expanded), tileSizeClass(t) }>
+		<div class="tile-header">
+			<span class="tile-title">{ t.Title }</span>
+			if t.Kind != TileKindGoal {
+				if t.Expanded {
+					<button class="tile-collapse-btn" data-on:click={ getExpr(tileURL(t.Metric, day, false)) } title="Collapse">
+						@iconCollapse()
+					</button>
+				} else {
+					<button class="tile-expand-btn" data-on:click={ getExpr(tileURL(t.Metric, day, true)) } title="Expand">
+						@iconExpand()
+					</button>
+				}
+			}
+		</div>
+		<div class="tile-body">
+			switch t.Kind {
+				case TileKindStat:
+					@statTileBody(t)
+				case TileKindSleep:
+					@statTileBody(t)
+				case TileKindActivities:
+					@activitiesTileBody(t)
+				case TileKindGoal:
+					@goalTileBody(t)
+			}
+		</div>
+	</div>
+}
+
+func tileSizeClass(t TileData) string {
+	if t.Kind == TileKindStat && t.Chart != nil {
+		return "tile-wide"
+	}
+	if t.Kind == TileKindActivities {
+		return "tile-wide"
+	}
+	return ""
+}
+
+templ statTileBody(t TileData) {
+	if t.Empty {
+		<div class="tile-empty">{ t.EmptyMsg }</div>
+	} else if t.Chart != nil {
+		<div class="tile-stat-header">
+			<span class="tile-stat-sub">Daily average: { t.BigValue }</span>
+		</div>
+		@templ.Raw(renderBarChartSVG(*t.Chart))
+	} else {
+		<div class="tile-big-value">{ t.BigValue } <span class="tile-unit">{ t.Unit }</span></div>
+		if t.Subtext != "" {
+			<div class="tile-subtext">{ t.Subtext }</div>
+		}
+	}
+}
+
+templ activitiesTileBody(t TileData) {
+	if len(t.Activities) == 0 {
+		<div class="tile-empty">No activities</div>
+	} else {
+		<ul class="activity-list">
+			for _, a := range t.Activities {
+				<li>
+					<button class="activity-item" data-on:click={ getExpr(activityURL(a.ID)) + "; $activityOpen = true" }>
+						<span class="activity-type">{ humanizeExerciseType(a.Type) }</span>
+						<span class="activity-meta">{ a.StartLabel } &middot; { FormatMinutes(a.DurationMinutes) }</span>
+					</button>
+				</li>
+			}
+		</ul>
+	}
+}
+
+templ goalTileBody(t TileData) {
+	<div class="goal-tile">
+		<p>{ t.GoalMessage }</p>
+		@goalGlassSVG(t.GoalPct)
+	</div>
+}

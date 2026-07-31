@@ -1,0 +1,11 @@
+package views
+
+// ErrorFragment renders into #view-body so a handler failure is at least
+// visible to the user instead of a blank/broken page.
+templ ErrorFragment(message string) {
+	<div id="view-body">
+		<div class="tile-empty" style="padding: 40px; text-align: center;">
+			Something went wrong: { message }
+		</div>
+	</div>
+}

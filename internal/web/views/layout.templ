@@ -1,0 +1,101 @@
+package views
+
+// Page is the full HTML document shell. Every full (non-SSE) page load
+// renders this once; subsequent navigation morphs #view-body in place via
+// Datastar SSE patches instead of reloading the page.
+templ Page(data DashboardData) {
+	<!DOCTYPE html>
+	<html lang="en" data-signals={ initialSignals(data.Day) }>
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>Personal Health Dashboard</title>
+			<link rel="stylesheet" href="/static/style.css"/>
+			<script type="module" src="/static/datastar.js"></script>
+		</head>
+		<body>
+			@Header()
+			<main class="main">
+				@DataViewBody(data)
+			</main>
+			<div id="activity-overlay" class="overlay" data-show="$activityOpen" style="display:none">
+				<div class="overlay-backdrop" data-on:click="$activityOpen = false"></div>
+				<div class="overlay-panel">
+					<button class="overlay-close" data-on:click="$activityOpen = false">&times;</button>
+					<div id="activity-detail"></div>
+				</div>
+			</div>
+		</body>
+	</html>
+}
+
+templ Header() {
+	<header class="site-header">
+		<div class="brand">
+			<span class="brand-title">Personal Health Dashboard</span>
+		</div>
+		<nav class="site-nav">
+			<a href="/">Dashboard</a>
+		</nav>
+	</header>
+}
+
+// DataViewBody and JournalViewBody both render into the same #view-body
+// id, so an SSE patch of either one morphs cleanly in place regardless of
+// which view was previously showing.
+templ DataViewBody(data DashboardData) {
+	<div id="view-body">
+		@ViewTabs(data)
+		@DayNav(data)
+		@Dashboard(data)
+	</div>
+}
+
+templ JournalViewBody(data DashboardData, j JournalData) {
+	<div id="view-body">
+		@ViewTabs(data)
+		@DayNav(data)
+		@JournalView(data, j)
+	</div>
+}
+
+templ ViewTabs(data DashboardData) {
+	<div class="view-tabs">
+		<button class={ "view-tab", templ.KV("active", data.View != "journal") } data-on:click={ getExpr(viewURL(data.Day, "data")) }>
+			{ data.Day }/data
+		</button>
+		<button class={ "view-tab", templ.KV("active", data.View == "journal") } data-on:click={ getExpr(viewURL(data.Day, "journal")) }>
+			{ data.Day }/journal
+		</button>
+	</div>
+}
+
+templ DayNav(data DashboardData) {
+	<div class="day-nav">
+		<button class="day-nav-btn" data-on:click={ getExpr(viewURL(data.PrevDay, data.View)) }>&lsaquo;</button>
+		<span class="day-nav-label">{ data.DayLabel }</span>
+		<button class="day-nav-btn" data-on:click={ getExpr(viewURL(data.NextDay, data.View)) }>&rsaquo;</button>
+		@SyncButton(data.Day, data.View, false)
+	</div>
+}
+
+// SyncButton is its own component (stable id) so the force-sync handler
+// can morph just this button to a spinner immediately, independently of
+// the (possibly much later) full-view refresh once the sync completes.
+templ SyncButton(day, view string, syncing bool) {
+	<button
+		id="sync-btn"
+		class="sync-btn"
+		data-on:click={ postExpr(syncURL(day, view)) }
+		disabled?={ syncing }
+		title="Force sync this day's Google Health data now"
+	>
+		if syncing {
+			@iconSpinner()
+			Syncing…
+		} else {
+			@iconSync()
+			Sync
+		}
+	</button>
+}

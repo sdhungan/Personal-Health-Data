@@ -1,0 +1,53 @@
+package views
+
+templ JournalView(data DashboardData, j JournalData) {
+	<div class="journal" id="journal-root" data-signals:autosave={ boolJS(j.AutoSave) }>
+		<div class="journal-toolbar">
+			<label class="journal-autosave-toggle">
+				<input type="checkbox" data-bind:autosave/>
+				Auto-save
+			</label>
+			<button class="journal-save-btn" data-show="!$autosave" data-on:click={ postExpr(journalSaveURL(j.Day)) }>Save</button>
+			@JournalStatusFragment(j)
+		</div>
+		<div class="journal-editor">
+			<textarea
+				id="journal-textarea"
+				class="journal-textarea"
+				data-bind:journalcontent
+				data-on:input__debounce.800ms={ "$autosave && " + postExpr(journalSaveURL(j.Day)) }
+			>{ j.Content }</textarea>
+			@JournalPreviewFragment(j)
+		</div>
+		<script>
+			(function() {
+				window.addEventListener('beforeunload', function() {
+					var el = document.getElementById('journal-textarea');
+					if (!el) return;
+					var blob = new Blob([el.value], { type: 'text/plain' });
+					navigator.sendBeacon({ journalBeaconURL(j.Day) }, blob);
+				});
+			})();
+		</script>
+	</div>
+}
+
+// JournalStatusFragment and JournalPreviewFragment are their own
+// components (stable IDs matching what's rendered inline above) so a save
+// response can morph just these two pieces via SSE without touching the
+// textarea the user might still be typing in.
+templ JournalStatusFragment(j JournalData) {
+	<span id="journal-status" class="journal-status">
+		if j.Error != "" {
+			<span class="journal-error">{ j.Error }</span>
+		} else if j.SavedAt != "" {
+			<span>Saved { j.SavedAt }</span>
+		}
+	</span>
+}
+
+templ JournalPreviewFragment(j JournalData) {
+	<div class="journal-preview" id="journal-preview">
+		@templ.Raw(j.ContentHTML)
+	</div>
+}
