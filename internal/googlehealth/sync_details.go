@@ -2,6 +2,8 @@ package googlehealth
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -241,6 +243,204 @@ func (s *DBSyncer) syncBodyMeasurement(ctx context.Context, day time.Time) (bool
 	`, dayKey(day), weightKg, heightCm, bodyFatPct)
 	if err != nil {
 		return false, fmt.Errorf("upserting body_measurement: %w", err)
+	}
+	return true, nil
+}
+
+// syncHeartRateZoneDefinitions upserts the day's personalized heart-rate
+// zone BPM thresholds (from daily-heart-rate-zones — confirmed via a real
+// response to be threshold definitions, not time-in-zone data, despite the
+// similar name to syncHeartRateZoneMinutes below).
+func (s *DBSyncer) syncHeartRateZoneDefinitions(ctx context.Context, day time.Time) (bool, error) {
+	v, found, err := fetchDailyAggregate[DailyHeartRateZones](ctx, s.Client, "daily-heart-rate-zones", day,
+		func(v DailyHeartRateZones) Date { return v.Date })
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+
+	dayStr := dayKey(day)
+	if _, err := s.DB.ExecContext(ctx, `DELETE FROM watch_heart_rate_zone_definition WHERE day = ?`, dayStr); err != nil {
+		return false, fmt.Errorf("clearing old heart rate zone definitions for %s: %w", dayStr, err)
+	}
+	for _, z := range v.HeartRateZones {
+		if _, err := s.DB.ExecContext(ctx, `
+			INSERT INTO watch_heart_rate_zone_definition (day, zone_type, min_bpm, max_bpm)
+			VALUES (?, ?, ?, ?)
+		`, dayStr, z.Type, int64(z.MinBeatsPerMinute), int64(z.MaxBeatsPerMinute)); err != nil {
+			return false, fmt.Errorf("inserting heart rate zone definition: %w", err)
+		}
+	}
+	return true, nil
+}
+
+// syncHeartRateZoneMinutes upserts the day's actual minutes spent in each
+// heart-rate zone (from time-in-heart-rate-zone) — the real time-series
+// counterpart to the thresholds above.
+func (s *DBSyncer) syncHeartRateZoneMinutes(ctx context.Context, day time.Time) (bool, error) {
+	points, err := fetchIntervalPoints[TimeInHeartRateZone](ctx, s.Client, "time-in-heart-rate-zone", day)
+	if err != nil {
+		return false, err
+	}
+	if len(points) == 0 {
+		return false, nil
+	}
+
+	byZone := map[string]float64{}
+	for _, p := range points {
+		byZone[p.HeartRateZone] += float64(p.DurationMillis) / 60000
+	}
+	dayStr := dayKey(day)
+	for zone, minutes := range byZone {
+		if _, err := s.DB.ExecContext(ctx, `
+			INSERT INTO watch_heart_rate_zone_minutes (day, zone_type, minutes)
+			VALUES (?, ?, ?)
+			ON CONFLICT(day, zone_type) DO UPDATE SET minutes = excluded.minutes
+		`, dayStr, zone, minutes); err != nil {
+			return false, fmt.Errorf("upserting heart rate zone minutes: %w", err)
+		}
+	}
+	return true, nil
+}
+
+// syncCaloriesByZone upserts the day's calories attributed to each
+// heart-rate zone (from calories-in-heart-rate-zone — INFERRED field shape,
+// see values.go's confidence-level convention).
+func (s *DBSyncer) syncCaloriesByZone(ctx context.Context, day time.Time) (bool, error) {
+	points, err := fetchIntervalPoints[CaloriesInHeartRateZone](ctx, s.Client, "calories-in-heart-rate-zone", day)
+	if err != nil {
+		return false, err
+	}
+	if len(points) == 0 {
+		return false, nil
+	}
+
+	byZone := map[string]float64{}
+	for _, p := range points {
+		byZone[p.HeartRateZone] += float64(p.Kcal)
+	}
+	dayStr := dayKey(day)
+	for zone, kcal := range byZone {
+		if _, err := s.DB.ExecContext(ctx, `
+			INSERT INTO watch_calories_by_zone (day, zone_type, kcal)
+			VALUES (?, ?, ?)
+			ON CONFLICT(day, zone_type) DO UPDATE SET kcal = excluded.kcal
+		`, dayStr, zone, kcal); err != nil {
+			return false, fmt.Errorf("upserting calories by zone: %w", err)
+		}
+	}
+	return true, nil
+}
+
+// syncRespiratoryRateSleepSummary matches each respiratory-rate-sleep-summary
+// sample to the sleep session covering its sample time (falling back to the
+// day's main sleep session if none contains it exactly) and updates that
+// session's per-stage respiratory rate columns.
+func (s *DBSyncer) syncRespiratoryRateSleepSummary(ctx context.Context, day time.Time) (bool, error) {
+	points, err := fetchSamplePoints[RespiratoryRateSleepSummary](ctx, s.Client, "respiratory-rate-sleep-summary", day)
+	if err != nil {
+		return false, err
+	}
+	if len(points) == 0 {
+		return false, nil
+	}
+
+	dayStr := dayKey(day)
+	found := false
+	for _, p := range points {
+		sampleTime, err := p.SampleTime.Time()
+		if err != nil {
+			continue
+		}
+
+		var sessionID int64
+		err = s.DB.QueryRowContext(ctx, `
+			SELECT id FROM watch_sleep_session
+			WHERE day = ? AND start_time <= ? AND end_time > ?
+			ORDER BY duration_minutes DESC LIMIT 1
+		`, dayStr, sampleTime.Format(time.RFC3339), sampleTime.Format(time.RFC3339)).Scan(&sessionID)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = s.DB.QueryRowContext(ctx, `
+				SELECT id FROM watch_sleep_session WHERE day = ? AND is_main_sleep = 1 LIMIT 1
+			`, dayStr).Scan(&sessionID)
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			continue // no session to attach this sample to yet
+		}
+		if err != nil {
+			return false, fmt.Errorf("finding sleep session for respiratory rate sample: %w", err)
+		}
+
+		if _, err := s.DB.ExecContext(ctx, `
+			UPDATE watch_sleep_session SET
+				deep_resp_rate_bpm  = ?,
+				light_resp_rate_bpm = ?,
+				rem_resp_rate_bpm   = ?,
+				full_resp_rate_bpm  = ?
+			WHERE id = ?
+		`, float64(p.DeepSleepStats.BreathsPerMinute), float64(p.LightSleepStats.BreathsPerMinute),
+			float64(p.RemSleepStats.BreathsPerMinute), float64(p.FullSleepStats.BreathsPerMinute), sessionID); err != nil {
+			return false, fmt.Errorf("updating sleep session respiratory rate: %w", err)
+		}
+		found = true
+	}
+	return found, nil
+}
+
+// syncBloodGlucose caches every blood-glucose sample for the day in full
+// (low volume, clinically precise readings — kept as-is rather than
+// day-summarized, same reasoning as watch_heart_rate_intraday but without
+// the pruning since this account has never returned any).
+func (s *DBSyncer) syncBloodGlucose(ctx context.Context, day time.Time) (bool, error) {
+	points, err := fetchSamplePoints[BloodGlucose](ctx, s.Client, "blood-glucose", day)
+	if err != nil {
+		return false, err
+	}
+	if len(points) == 0 {
+		return false, nil
+	}
+	for _, p := range points {
+		t, err := p.SampleTime.Time()
+		if err != nil {
+			continue
+		}
+		if _, err := s.DB.ExecContext(ctx, `
+			INSERT INTO watch_blood_glucose_sample (recorded_at, mg_dl, measurement_source, measurement_timing, meal_type, specimen)
+			VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT(recorded_at) DO UPDATE SET
+				mg_dl = excluded.mg_dl, measurement_source = excluded.measurement_source,
+				measurement_timing = excluded.measurement_timing, meal_type = excluded.meal_type, specimen = excluded.specimen
+		`, t.Format(time.RFC3339), float64(p.BloodGlucoseMilligramsPerDeciliter), p.MeasurementSource, p.MeasurementTiming, p.MealType, p.Specimen); err != nil {
+			return false, fmt.Errorf("upserting blood glucose sample: %w", err)
+		}
+	}
+	return true, nil
+}
+
+// syncCoreBodyTemperature caches every core-body-temperature sample for the
+// day in full — same reasoning as syncBloodGlucose.
+func (s *DBSyncer) syncCoreBodyTemperature(ctx context.Context, day time.Time) (bool, error) {
+	points, err := fetchSamplePoints[CoreBodyTemperature](ctx, s.Client, "core-body-temperature", day)
+	if err != nil {
+		return false, err
+	}
+	if len(points) == 0 {
+		return false, nil
+	}
+	for _, p := range points {
+		t, err := p.SampleTime.Time()
+		if err != nil {
+			continue
+		}
+		if _, err := s.DB.ExecContext(ctx, `
+			INSERT INTO watch_core_body_temperature_sample (recorded_at, celsius, measurement_location)
+			VALUES (?, ?, ?)
+			ON CONFLICT(recorded_at) DO UPDATE SET celsius = excluded.celsius, measurement_location = excluded.measurement_location
+		`, t.Format(time.RFC3339), float64(p.TemperatureCelsius), p.MeasurementLocation); err != nil {
+			return false, fmt.Errorf("upserting core body temperature sample: %w", err)
+		}
 	}
 	return true, nil
 }

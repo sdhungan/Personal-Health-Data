@@ -76,26 +76,43 @@ CREATE TABLE sync_state (
 -- `raw_payload` keeps the full JSON response for that day so a first-pass
 -- column set can't silently lose data — future columns can be backfilled
 -- from it without re-hitting the API.
+-- kcal_burned_google/kcal_burned_cronometer (on cronometer_daily_nutrition)
+-- are deliberately two separate columns, not one: Google's watch-based
+-- estimate and Cronometer's own (BMR + activity + food thermic-effect)
+-- expenditure figure are different calculations from different sources,
+-- and Cronometer sync doesn't exist in this codebase yet (see
+-- prerequisite.md) so its column sits NULL until that's built.
 CREATE TABLE watch_daily_summary (
     day                      TEXT PRIMARY KEY,
     steps_total              INTEGER,
     distance_m                REAL,
     floors_climbed            INTEGER,
+    altitude_gain_m           REAL,
+    sedentary_minutes         INTEGER,
     active_minutes            INTEGER,
+    light_active_minutes      INTEGER,
+    moderate_active_minutes   INTEGER,
+    vigorous_active_minutes   INTEGER,
     active_zone_minutes       INTEGER,
-    total_calories            REAL,
+    kcal_burned_google        REAL,
+    active_energy_burned_kcal REAL,
     resting_heart_rate_bpm    REAL,
     heart_rate_min_bpm        REAL,
     heart_rate_max_bpm        REAL,
     heart_rate_avg_bpm        REAL,
     hrv_avg_ms                REAL,
     vo2_max                   REAL,
+    vo2_max_sample            REAL,
+    vo2_max_run_sample        REAL,
     spo2_avg_pct              REAL,
     spo2_min_pct              REAL,
     respiratory_rate_avg_bpm  REAL,
     sleep_duration_minutes    INTEGER,
     sleep_score               INTEGER,
     stress_management_score   INTEGER,
+    sleep_temperature_c                 REAL,
+    sleep_temperature_baseline_c        REAL,
+    sleep_temperature_deviation_30d_c   REAL,
     source_synced_at          TEXT,
     raw_payload               TEXT,
     created_at                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -142,6 +159,12 @@ CREATE TABLE watch_sleep_session (
     minutes_light     INTEGER,
     minutes_deep      INTEGER,
     minutes_rem       INTEGER,
+    -- Per-stage respiratory rate (from respiratory-rate-sleep-summary,
+    -- matched to whichever session's interval contains its sample time).
+    deep_resp_rate_bpm    REAL,
+    light_resp_rate_bpm   REAL,
+    rem_resp_rate_bpm     REAL,
+    full_resp_rate_bpm    REAL,
     UNIQUE (day, start_time)
 );
 
@@ -188,6 +211,58 @@ CREATE TABLE watch_ecg_reading (
 );
 
 CREATE INDEX idx_watch_ecg_reading_recorded_at ON watch_ecg_reading (recorded_at);
+
+-- Personalized heart-rate zone BPM thresholds for the day (from
+-- daily-heart-rate-zones) -- despite the name's similarity to
+-- watch_heart_rate_zone_minutes below, this is NOT a time-series metric:
+-- it's just "what BPM range counts as each zone type today" (drifts slowly
+-- as fitness/resting HR changes), confirmed against a real response.
+CREATE TABLE watch_heart_rate_zone_definition (
+    day       TEXT NOT NULL,
+    zone_type TEXT NOT NULL,
+    min_bpm   INTEGER,
+    max_bpm   INTEGER,
+    PRIMARY KEY (day, zone_type)
+);
+
+-- Actual minutes spent in each heart-rate zone per day (from
+-- time-in-heart-rate-zone) -- the real time-series counterpart to the
+-- thresholds above.
+CREATE TABLE watch_heart_rate_zone_minutes (
+    day       TEXT NOT NULL,
+    zone_type TEXT NOT NULL,
+    minutes   REAL,
+    PRIMARY KEY (day, zone_type)
+);
+
+-- Calories attributed to time spent in each heart-rate zone per day (from
+-- calories-in-heart-rate-zone). INFERRED shape (see
+-- internal/googlehealth/values.go's confidence-level convention) --
+-- Google's reference doesn't document this type's fields directly.
+CREATE TABLE watch_calories_by_zone (
+    day       TEXT NOT NULL,
+    zone_type TEXT NOT NULL,
+    kcal      REAL,
+    PRIMARY KEY (day, zone_type)
+);
+
+-- Full-fidelity sample tables for types this account's current
+-- watch/phone combination has never returned data for, but are fetchable
+-- under our existing scopes and get plumbing anyway (see prerequisite.md).
+CREATE TABLE watch_blood_glucose_sample (
+    recorded_at        TEXT PRIMARY KEY,
+    mg_dl              REAL NOT NULL,
+    measurement_source TEXT,
+    measurement_timing TEXT,
+    meal_type          TEXT,
+    specimen           TEXT
+);
+
+CREATE TABLE watch_core_body_temperature_sample (
+    recorded_at          TEXT PRIMARY KEY,
+    celsius              REAL NOT NULL,
+    measurement_location TEXT
+);
 
 -- =============================================================================
 -- Body measurements (weight/height/body-fat can come from a Google
@@ -236,6 +311,13 @@ CREATE TABLE cronometer_daily_nutrition (
     day               TEXT PRIMARY KEY,
     completed         INTEGER NOT NULL DEFAULT 0,
     energy_kcal       REAL,
+    -- Cronometer's own total-expenditure estimate (BMR + activity + food
+    -- thermic effect) -- deliberately a separate figure from
+    -- watch_daily_summary.kcal_burned_google, not a replacement for it.
+    -- Sits NULL until a Cronometer sync client exists (see
+    -- prerequisite.md -- internal/cli/sync.go's "TODO: run the Cronometer
+    -- sync pass too" is still just a TODO as of this column's addition).
+    kcal_burned_cronometer REAL,
     caffeine_mg       REAL,
     water_g           REAL,
     b1_mg             REAL,
@@ -459,7 +541,7 @@ SELECT
     w.day,
     w.steps_total,
     w.active_minutes,
-    w.total_calories,
+    w.kcal_burned_google,
     w.resting_heart_rate_bpm,
     w.sleep_duration_minutes,
     c.energy_kcal          AS nutrition_energy_kcal,

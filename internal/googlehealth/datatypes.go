@@ -43,6 +43,14 @@ var DataTypes = []dataType{
 	{Name: "run-vo2-max", Kind: kindSample},
 	{Name: "daily-vo2-max", Kind: kindDailyAggregate},
 	{Name: "exercise", Kind: kindSession},
+	// Confirmed to exist via the RPC reference (SwimLengthsData /
+	// SwimLengthsDataRollupValue) but never observed against a real
+	// response from this account, so its field shape isn't modeled in
+	// values.go yet and DBSyncer doesn't sync it — see prerequisite.md.
+	// Listed here so DumpToday can capture a real response to verify
+	// against, the same "confirm before trusting" discipline every other
+	// type in this file follows.
+	{Name: "swim-lengths-data", Kind: kindSession},
 
 	{Name: "body-fat", Kind: kindSample},
 	{Name: "height", Kind: kindSample},

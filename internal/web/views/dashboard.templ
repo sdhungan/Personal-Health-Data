@@ -1,18 +1,60 @@
 package views
 
+import (
+	"fmt"
+	"strings"
+)
+
+// tileSections is the fixed category order the dashboard groups tiles
+// into — mirrors Apple Health's own Browse grouping (Activity, Heart, Body
+// Measurements, Sleep, Respiratory) rather than one flat grid of same-weight
+// tiles.
+var tileSections = []struct{ Key, Title string }{
+	{"activity", "Activity"},
+	{"heart", "Heart"},
+	{"body", "Body Measurements"},
+	{"sleep", "Sleep"},
+	{"respiratory", "Respiratory"},
+}
+
+func tilesForCategory(tiles []TileData, category string) []TileData {
+	var out []TileData
+	for _, t := range tiles {
+		if t.Category == category {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 templ Dashboard(data DashboardData) {
-	<div class="dashboard-grid" id="dashboard-grid">
-		for _, t := range data.Tiles {
-			@Tile(t, data.Day)
+	<div class="dashboard" id="dashboard-grid">
+		for _, section := range tileSections {
+			{{ tiles := tilesForCategory(data.Tiles, section.Key) }}
+			if len(tiles) > 0 {
+				<section class="dashboard-section">
+					<h2 class="section-title">{ section.Title }</h2>
+					<div class="dashboard-grid">
+						for _, t := range tiles {
+							@Tile(t, data.Day)
+						}
+					</div>
+				</section>
+			}
 		}
 	</div>
 }
 
 templ Tile(t TileData, day string) {
-	<div id={ t.ID } class={ "tile", templ.KV("tile-expanded", t.Expanded), tileSizeClass(t) }>
+	<div id={ t.ID } data-category={ t.Category } class={ "tile", templ.KV("tile-expanded", t.Expanded), tileSizeClass(t) }>
 		<div class="tile-header">
-			<span class="tile-title">{ t.Title }</span>
-			if t.Kind != TileKindGoal {
+			<div class="tile-header-left">
+				<span class="tile-icon-badge">
+					@iconFor(t.Icon)
+				</span>
+				<span class="tile-title">{ t.Title }</span>
+			</div>
+			if t.Kind != TileKindBody {
 				if t.Expanded {
 					<button class="tile-collapse-btn" data-on:click={ getExpr(tileURL(t.Metric, day, false)) } title="Collapse">
 						@iconCollapse()
@@ -32,37 +74,118 @@ templ Tile(t TileData, day string) {
 					@statTileBody(t)
 				case TileKindActivities:
 					@activitiesTileBody(t)
-				case TileKindGoal:
-					@goalTileBody(t)
+				case TileKindBody:
+					@bodyTileBody(t)
 			}
 		</div>
 	</div>
 }
 
 func tileSizeClass(t TileData) string {
-	if t.Kind == TileKindStat && t.Chart != nil {
+	if (t.Kind == TileKindStat || t.Kind == TileKindSleep) && (t.Chart != nil || t.Detail != nil) {
 		return "tile-wide"
 	}
-	if t.Kind == TileKindActivities {
+	if t.Kind == TileKindActivities || t.Kind == TileKindBody {
 		return "tile-wide"
 	}
 	return ""
 }
 
 templ statTileBody(t TileData) {
-	if t.Empty {
+	if t.Expanded && t.Detail != nil {
+		@detailTileBody(t)
+	} else if t.Empty {
 		<div class="tile-empty">{ t.EmptyMsg }</div>
 	} else if t.Chart != nil {
 		<div class="tile-stat-header">
-			<span class="tile-stat-sub">Daily average: { t.BigValue }</span>
+			<span class="tile-stat-sub">{ t.ChartSubtext }</span>
 		</div>
-		@templ.Raw(renderBarChartSVG(*t.Chart))
+		@templ.Raw(renderBarChartSVG(*t.Chart, chartInstanceID(t.ID)))
 	} else {
-		<div class="tile-big-value">{ t.BigValue } <span class="tile-unit">{ t.Unit }</span></div>
-		if t.Subtext != "" {
-			<div class="tile-subtext">{ t.Subtext }</div>
+		<div class="tile-value-row">
+			<div>
+				<div class="tile-big-value">{ t.BigValue } <span class="tile-unit">{ t.Unit }</span></div>
+				if t.Subtext != "" {
+					<div class="tile-subtext">{ t.Subtext }</div>
+				}
+			</div>
+			if t.RingPct != nil {
+				@stepRingSVG(*t.RingPct)
+			}
+		</div>
+		if len(t.SparklineValues) > 0 {
+			<div class="tile-sparkline">
+				@templ.Raw(renderSparklineSVG(t.SparklineValues))
+			</div>
 		}
 	}
+}
+
+// detailTileBody renders an expanded metric's rich detail view — an
+// intraday heart-rate line or a sleep stage timeline — as opposed to the
+// generic 7-day/hourly bar chart every other metric falls back to.
+templ detailTileBody(t TileData) {
+	if t.Detail.Message != "" {
+		<div class="tile-empty">{ t.Detail.Message }</div>
+	}
+	if len(t.Detail.Stats) > 0 {
+		<div class="detail-stats-row">
+			for _, s := range t.Detail.Stats {
+				<div class="detail-stat">
+					<span class="detail-stat-value">{ s.Value }</span>
+					<span class="detail-stat-label">{ s.Label }</span>
+				</div>
+			}
+		</div>
+	}
+	switch t.Detail.Kind {
+		case "line":
+			if len(t.Detail.LineSamples) > 0 {
+				@templ.Raw(renderLineChartSVG(t.Detail.LineSamples, chartInstanceID(t.ID)))
+			}
+		case "stages":
+			if len(t.Detail.Stages) > 0 {
+				if t.Detail.RangeLabel != "" {
+					<div class="tile-stat-sub">{ t.Detail.RangeLabel }</div>
+				}
+				@templ.Raw(renderStageTimelineSVG(t.Detail.Stages))
+				@stageLegend(t.Detail.Stages)
+			}
+	}
+}
+
+// stageLegend renders one dot+label per distinct segment type actually
+// present, in first-seen order — shared by sleep stages (AWAKE/LIGHT/DEEP/
+// REM) and heart-rate zone minutes (LIGHT/MODERATE/VIGOROUS/PEAK), so
+// neither needs its own hardcoded legend.
+templ stageLegend(stages []StageSegment) {
+	<div class="stage-legend">
+		for _, stageType := range distinctStageTypes(stages) {
+			<span class="stage-legend-item">
+				<span class={ "stage-dot", "stage-" + strings.ToLower(stageType) }></span>
+				{ humanizeStageType(stageType) }
+			</span>
+		}
+	</div>
+}
+
+func distinctStageTypes(stages []StageSegment) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, s := range stages {
+		if !seen[s.Type] {
+			seen[s.Type] = true
+			out = append(out, s.Type)
+		}
+	}
+	return out
+}
+
+func humanizeStageType(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + strings.ToLower(s[1:])
 }
 
 templ activitiesTileBody(t TileData) {
@@ -73,18 +196,19 @@ templ activitiesTileBody(t TileData) {
 			for _, a := range t.Activities {
 				<li>
 					<button class="activity-item" data-on:click={ getExpr(activityURL(a.ID)) + "; $activityOpen = true" }>
-						<span class="activity-type">{ humanizeExerciseType(a.Type) }</span>
-						<span class="activity-meta">{ a.StartLabel } &middot; { FormatMinutes(a.DurationMinutes) }</span>
+						<span class="activity-main">
+							<span class="activity-type">{ humanizeExerciseType(a.Type) }</span>
+							<span class="activity-meta">{ a.StartLabel } &middot; { FormatMinutes(a.DurationMinutes) }</span>
+						</span>
+						<span class="activity-stats">
+							<span class="activity-stat">{ fmt.Sprintf("%.0f kcal", a.CaloriesBurned) }</span>
+							if a.AvgHeartRateBpm != nil {
+								<span class="activity-stat">{ fmt.Sprintf("%.0f bpm", *a.AvgHeartRateBpm) }</span>
+							}
+						</span>
 					</button>
 				</li>
 			}
 		</ul>
 	}
-}
-
-templ goalTileBody(t TileData) {
-	<div class="goal-tile">
-		<p>{ t.GoalMessage }</p>
-		@goalGlassSVG(t.GoalPct)
-	</div>
 }

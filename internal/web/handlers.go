@@ -3,9 +3,11 @@ package web
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -66,13 +68,15 @@ func buildDashboardData(ctx context.Context, db *sql.DB, day time.Time, view str
 		switch {
 		case kind == "activities":
 			t, err = buildActivitiesTile(ctx, db, t, day, t.Expanded)
-		case kind == "goal":
-			t, err = buildGoalTile(ctx, db, t, day)
+		case kind == "body":
+			t, err = buildBodyTile(ctx, db, t, day)
+		case kind == "hr_zones":
+			t, err = buildHeartRateZonesTile(ctx, db, t, day, t.Expanded)
 		default:
 			if _, ok := metricDefs[kind]; !ok {
 				continue
 			}
-			t = buildStatTile(t, kind, day, t.Expanded, today, history)
+			t, err = buildStatTile(ctx, db, t, kind, day, t.Expanded, today, history)
 		}
 		if err != nil {
 			return data, err
@@ -144,8 +148,8 @@ func (s *Server) handleTile(c echo.Context) error {
 	switch {
 	case kind == "activities":
 		t, err = buildActivitiesTile(ctx, s.DB, t, day, expanded)
-	case kind == "goal":
-		t, err = buildGoalTile(ctx, s.DB, t, day)
+	case kind == "body":
+		t, err = buildBodyTile(ctx, s.DB, t, day)
 	default:
 		if _, ok := metricDefs[kind]; !ok {
 			return c.String(http.StatusNotFound, "unknown tile kind")
@@ -160,7 +164,7 @@ func (s *Server) handleTile(c echo.Context) error {
 			err = ferr
 			break
 		}
-		t = buildStatTile(t, kind, day, expanded, today, history)
+		t, err = buildStatTile(ctx, s.DB, t, kind, day, expanded, today, history)
 	}
 	if err != nil {
 		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
@@ -354,4 +358,99 @@ func (s *Server) handleJournalBeacon(c echo.Context) error {
 
 func parseInt64(s string) (int64, error) {
 	return strconv.ParseInt(s, 10, 64)
+}
+
+// handleBodyMeasurementSave answers the Body Measurements tile's per-field
+// on-change save, mirroring handleJournalSave's read-signals-then-SSE
+// pattern.
+func (s *Server) handleBodyMeasurementSave(c echo.Context) error {
+	ctx := c.Request().Context()
+	day := c.QueryParam("day")
+	if day == "" {
+		day = time.Now().Format(dateLayout)
+	}
+
+	// Datastar sends a number-input's bound signal as a bare JSON number
+	// (e.g. 82.5) when it has a value, but as an empty string once the
+	// field is cleared — json.RawMessage plus parseOptionalFloatRaw handles
+	// both shapes (and a JSON null, just in case) rather than assuming one.
+	var signals struct {
+		BMWeight json.RawMessage `json:"bmweight"`
+		BMWaist  json.RawMessage `json:"bmwaist"`
+		BMNeck   json.RawMessage `json:"bmneck"`
+	}
+	readErr := datastar.ReadSignals(c.Request(), &signals)
+
+	sse := datastar.NewSSE(c.Response(), c.Request())
+	if readErr != nil {
+		return sse.PatchElementTempl(views.ErrorFragment("reading request: " + readErr.Error()))
+	}
+
+	weight := parseOptionalFloatRaw(signals.BMWeight)
+	waist := parseOptionalFloatRaw(signals.BMWaist)
+	neck := parseOptionalFloatRaw(signals.BMNeck)
+	if err := saveBodyMeasurement(ctx, s.DB, day, weight, waist, neck); err != nil {
+		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
+	}
+	return s.patchBodyTile(sse, ctx, day, "Saved "+time.Now().Format("15:04:05"))
+}
+
+// handleBodyMeasurementCarryForward answers the "Carry forward" button:
+// fills whichever of today's weight/waist/neck are empty from the most
+// recent earlier day that has a value for that specific field.
+func (s *Server) handleBodyMeasurementCarryForward(c echo.Context) error {
+	ctx := c.Request().Context()
+	day := c.QueryParam("day")
+	if day == "" {
+		day = time.Now().Format(dateLayout)
+	}
+
+	sse := datastar.NewSSE(c.Response(), c.Request())
+	if err := carryForwardBodyMeasurement(ctx, s.DB, day); err != nil {
+		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
+	}
+	return s.patchBodyTile(sse, ctx, day, "Carried forward from a previous day")
+}
+
+// patchBodyTile re-fetches and patches #tile-body after a save/carry-forward
+// — the same "rebuild the one tile, patch it" shape handleTile uses.
+func (s *Server) patchBodyTile(sse *datastar.ServerSentEventGenerator, ctx context.Context, day, savedAt string) error {
+	dayTime, err := time.ParseInLocation(dateLayout, day, time.Local)
+	if err != nil {
+		dayTime = time.Now()
+	}
+	t := views.TileData{ID: "tile-body", Metric: "body"}
+	t, err = buildBodyTile(ctx, s.DB, t, dayTime)
+	if err != nil {
+		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
+	}
+	if t.Body != nil {
+		t.Body.SavedAt = savedAt
+	}
+	return sse.PatchElementTempl(views.Tile(t, day))
+}
+
+// parseOptionalFloatRaw converts a Datastar signal value that may arrive as
+// a JSON number, a JSON string (numeric or blank), or null/absent into an
+// optional float64 — blank/null means "clear this field, write NULL".
+func parseOptionalFloatRaw(raw json.RawMessage) *float64 {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" || s == `""` {
+		return nil
+	}
+	var f float64
+	if err := json.Unmarshal(raw, &f); err == nil {
+		return &f
+	}
+	var str string
+	if err := json.Unmarshal(raw, &str); err == nil {
+		str = strings.TrimSpace(str)
+		if str == "" {
+			return nil
+		}
+		if v, err := strconv.ParseFloat(str, 64); err == nil {
+			return &v
+		}
+	}
+	return nil
 }

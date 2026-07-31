@@ -7,8 +7,16 @@
   --text: #f2f2f2;
   --text-dim: #9a9a9a;
   --accent: #14b8a6;
-  --accent-warm: #f5a623;
   --danger: #e5484d;
+
+  /* Category accents — mirrors Apple Health's own section colors, used for
+     each tile's icon badge, left accent, and any category-specific chart
+     marks (sleep stage segments, the step-goal ring). */
+  --cat-activity: #ff9f0a;
+  --cat-heart: #ff375f;
+  --cat-body: #bf5af2;
+  --cat-sleep: #5e5ce6;
+  --cat-respiratory: #64d2ff;
 }
 
 * { box-sizing: border-box; }
@@ -39,40 +47,48 @@ body {
 
 .main { padding: 20px 24px 60px; max-width: 1400px; margin: 0 auto; }
 
+/* ---- Day scrubber header (view tabs + prev/next + sync) ---- */
+
 .view-tabs {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   margin-bottom: 14px;
 }
 .view-tab {
   background: none;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   color: var(--text-dim);
   padding: 6px 14px;
-  border-radius: 8px 8px 0 0;
+  border-radius: 999px;
   cursor: pointer;
   font-size: 0.85rem;
+  font-weight: 500;
 }
-.view-tab.active { color: var(--text); background: var(--tile-bg); border-bottom-color: var(--tile-bg); }
+.view-tab:hover { color: var(--text); }
+.view-tab.active { color: var(--text); background: var(--tile-bg); border-color: var(--border); }
 
 .day-nav {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 18px;
+  gap: 4px;
+  margin-bottom: 20px;
+  background: var(--tile-bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 8px 6px 16px;
 }
 .day-nav-btn {
   background: none;
   border: none;
   color: var(--text);
-  font-size: 1.6rem;
+  font-size: 1.4rem;
   cursor: pointer;
   line-height: 1;
-  padding: 2px 8px;
-  border-radius: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
 }
 .day-nav-btn:hover { background: var(--tile-bg-hover); }
-.day-nav-label { font-size: 1.3rem; font-weight: 600; }
+.day-nav-label { font-size: 1.05rem; font-weight: 600; flex: 1; }
 
 .sync-btn {
   margin-left: auto;
@@ -83,7 +99,7 @@ body {
   border: 1px solid var(--border);
   color: var(--text-dim);
   padding: 6px 12px;
-  border-radius: 8px;
+  border-radius: 999px;
   cursor: pointer;
   font-size: 0.85rem;
 }
@@ -96,22 +112,42 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/* ---- Sectioned dashboard ---- */
+
+.dashboard { display: flex; flex-direction: column; gap: 28px; }
+
+.section-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0 0 12px 2px;
+}
+
 .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 16px;
+  gap: 14px;
   grid-auto-flow: dense;
 }
 
 .tile {
   background: var(--tile-bg);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-left: 3px solid var(--tile-accent, var(--border));
+  border-radius: 14px;
   padding: 16px;
   min-height: 140px;
   display: flex;
   flex-direction: column;
 }
+.tile[data-category="activity"]     { --tile-accent: var(--cat-activity); }
+.tile[data-category="heart"]        { --tile-accent: var(--cat-heart); }
+.tile[data-category="body"]         { --tile-accent: var(--cat-body); }
+.tile[data-category="sleep"]        { --tile-accent: var(--cat-sleep); }
+.tile[data-category="respiratory"]  { --tile-accent: var(--cat-respiratory); }
+
 .tile-wide { grid-column: span 2; }
 .tile-expanded { grid-column: 1 / -1; }
 
@@ -119,7 +155,19 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
+}
+.tile-header-left { display: flex; align-items: center; gap: 8px; }
+.tile-icon-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  color: var(--tile-accent, var(--text-dim));
+  background: color-mix(in srgb, var(--tile-accent, var(--text-dim)) 16%, transparent);
+  flex-shrink: 0;
 }
 .tile-title { font-weight: 600; font-size: 0.95rem; }
 .tile-expand-btn, .tile-collapse-btn {
@@ -134,22 +182,93 @@ body {
 
 .tile-body { flex: 1; display: flex; flex-direction: column; justify-content: center; }
 
+.tile-value-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .tile-big-value { font-size: 2rem; font-weight: 700; }
 .tile-unit { font-size: 1rem; font-weight: 400; color: var(--text-dim); }
 .tile-subtext { color: var(--text-dim); font-size: 0.85rem; margin-top: 6px; }
 .tile-empty { color: var(--text-dim); font-size: 0.95rem; }
 
-.tile-stat-header { margin-bottom: 4px; }
-.tile-stat-sub { color: var(--text-dim); font-size: 0.85rem; }
+.tile-sparkline { margin-top: 10px; color: var(--tile-accent, var(--accent)); }
+.sparkline-svg { width: 100%; height: 28px; display: block; }
+.sparkline-line { fill: none; stroke: currentColor; stroke-width: 2; }
 
-.chart-svg { width: 100%; height: auto; }
+.step-ring { color: var(--cat-activity); flex-shrink: 0; }
+.step-ring-track { stroke: var(--border); }
+.step-ring-fill { stroke: currentColor; transition: stroke-dasharray 0.3s ease; }
+
+.tile-stat-header { margin-bottom: 4px; }
+.tile-stat-sub { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 6px; }
+
+.chart-wrap { position: relative; }
+.chart-svg { width: 100%; height: auto; display: block; }
 .chart-axis { stroke: var(--border); stroke-width: 1; }
+.chart-gridline { stroke: var(--text); stroke-width: 1; opacity: 0.08; }
 .chart-axis-label { fill: var(--text-dim); font-size: 9px; }
-.chart-bar { fill: var(--accent); }
+.chart-bar { fill: var(--tile-accent, var(--accent)); cursor: crosshair; }
 .chart-bar-label { fill: var(--text-dim); font-size: 9px; text-anchor: middle; }
 .chart-goal-line { stroke: #4caf50; stroke-dasharray: 4 3; }
 .chart-goal-label { fill: var(--text-dim); font-size: 9px; }
-.chart-line { fill: none; stroke: var(--accent); stroke-width: 2; }
+.chart-line { fill: none; stroke: var(--tile-accent, var(--accent)); stroke-width: 2; pointer-events: none; }
+.chart-hit-target { fill: transparent; cursor: crosshair; }
+
+/* ---- Grafana-style hover crosshair + tooltip (pure Datastar, no JS lib) ---- */
+.chart-crosshair-v, .chart-crosshair-h {
+  position: absolute;
+  background: var(--text-dim);
+  opacity: 0.5;
+  pointer-events: none;
+}
+.chart-crosshair-v { top: 0; bottom: 0; width: 1px; transform: translateX(-50%); }
+.chart-crosshair-h { left: 0; right: 0; height: 1px; transform: translateY(-50%); }
+.chart-tooltip {
+  position: absolute;
+  transform: translate(-50%, -100%) translateY(-10px);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+  z-index: 5;
+}
+.chart-tooltip-label { color: var(--text-dim); }
+.chart-tooltip-value { font-weight: 600; color: var(--text); }
+
+/* ---- Expanded rich detail (heart-rate intraday / sleep stages) ---- */
+
+.detail-stats-row {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 10px;
+}
+.detail-stat { display: flex; flex-direction: column; }
+.detail-stat-value { font-size: 1.2rem; font-weight: 700; }
+.detail-stat-label { color: var(--text-dim); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; }
+
+.stage-timeline { border-radius: 6px; overflow: hidden; }
+.stage-seg { }
+.stage-awake    { fill: #ff9f0a; }
+.stage-light    { fill: #64d2ff; }
+.stage-deep     { fill: #5e5ce6; }
+.stage-rem      { fill: #bf5af2; }
+.stage-moderate { fill: #ff9f0a; }
+.stage-vigorous { fill: #ff375f; }
+.stage-peak     { fill: #e5484d; }
+
+.stage-legend { display: flex; gap: 14px; margin-top: 8px; flex-wrap: wrap; }
+.stage-legend-item { display: flex; align-items: center; gap: 5px; font-size: 0.8rem; color: var(--text-dim); }
+.stage-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.stage-dot.stage-awake    { background: #ff9f0a; }
+.stage-dot.stage-light    { background: #64d2ff; }
+.stage-dot.stage-deep     { background: #5e5ce6; }
+.stage-dot.stage-rem      { background: #bf5af2; }
+.stage-dot.stage-moderate { background: #ff9f0a; }
+.stage-dot.stage-vigorous { background: #ff375f; }
+.stage-dot.stage-peak     { background: #e5484d; }
+
+/* ---- Activities / workouts list ---- */
 
 .activity-list { list-style: none; margin: 0; padding: 0; }
 .activity-item {
@@ -159,16 +278,54 @@ body {
   border: none;
   border-bottom: 1px solid var(--border);
   color: var(--text);
-  padding: 8px 0;
+  padding: 10px 0;
   cursor: pointer;
   display: flex;
+  align-items: center;
   justify-content: space-between;
+  gap: 12px;
 }
-.activity-item:hover { color: var(--accent); }
+.activity-item:last-child { border-bottom: none; }
+.activity-item:hover .activity-type { color: var(--cat-activity); }
+.activity-main { display: flex; flex-direction: column; gap: 2px; }
+.activity-type { font-weight: 600; }
 .activity-meta { color: var(--text-dim); font-size: 0.85rem; }
+.activity-stats { display: flex; gap: 12px; flex-shrink: 0; }
+.activity-stat { color: var(--text-dim); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
 
-.goal-tile { text-align: center; }
-.goal-glass { color: var(--accent-warm); margin-top: 8px; }
+/* ---- Body Measurements form ---- */
+
+.body-form { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
+.body-field { display: flex; flex-direction: column; gap: 6px; min-width: 100px; }
+.body-field label { color: var(--text-dim); font-size: 0.8rem; }
+.body-field input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 1rem;
+  width: 100%;
+}
+.body-field input:focus { outline: none; border-color: var(--cat-body); }
+.body-form-footer { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+.body-carry-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 7px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.body-carry-btn:hover { color: var(--text); background: var(--tile-bg-hover); }
+.body-saved-status { color: var(--text-dim); font-size: 0.8rem; }
+
+/* ---- Activity detail overlay ---- */
 
 .overlay {
   position: fixed;
@@ -183,7 +340,7 @@ body {
   position: relative;
   background: var(--tile-bg);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 24px;
   max-width: 640px;
   width: 90%;
@@ -202,6 +359,8 @@ body {
 }
 .activity-detail-meta { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 12px 0; }
 .activity-detail-meta .label { display: block; color: var(--text-dim); font-size: 0.8rem; }
+
+/* ---- Journal ---- */
 
 .journal { display: flex; flex-direction: column; gap: 12px; }
 .journal-toolbar { display: flex; align-items: center; gap: 16px; }
@@ -222,7 +381,7 @@ body {
   min-height: 400px;
   background: var(--tile-bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   color: var(--text);
   padding: 12px;
   font-family: ui-monospace, monospace;
@@ -233,7 +392,7 @@ body {
   min-height: 400px;
   background: var(--tile-bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 12px;
   overflow-y: auto;
 }
@@ -244,7 +403,7 @@ body {
   border: 1px dashed var(--border);
   color: var(--text-dim);
   background: none;
-  border-radius: 12px;
+  border-radius: 14px;
   min-height: 140px;
   cursor: pointer;
 }

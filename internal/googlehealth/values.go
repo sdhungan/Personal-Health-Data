@@ -93,6 +93,16 @@ type TotalCaloriesRollup struct {
 	KcalSum PBFloat64 `json:"kcalSum"`
 }
 
+// FloorsRollup is UNCONFIRMED — floors has NoList set (list() outright
+// rejected), so dailyRollUp is the only fetch path, but this account's own
+// floors rollup response has always come back empty (no real sample to
+// verify a shape against). This guesses by symmetry with
+// TotalCaloriesRollup; a wrong key here is safe (ExtractRollupValues just
+// returns no points) rather than silently decoding the wrong field.
+type FloorsRollup struct {
+	FloorsSum PBFloat64 `json:"floorsSum"`
+}
+
 // ---- CONFIRMED (sessions) ----
 
 // Electrocardiogram is CONFIRMED. waveformSamples (the raw signal, an

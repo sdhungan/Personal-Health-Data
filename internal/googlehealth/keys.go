@@ -40,6 +40,8 @@ func ValueKey(dataTypeName string) string {
 		return "dailyVo2Max"
 	case "exercise":
 		return "exercise"
+	case "swim-lengths-data":
+		return "swimLengthsData"
 	case "body-fat":
 		return "bodyFat"
 	case "height":

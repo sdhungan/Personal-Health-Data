@@ -88,6 +88,30 @@ func testDataResponses() map[string]string {
 			"interval":{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T11:00:00Z"},
 			"activeMinutesByActivityLevel":[{"activityLevel":"MODERATE","minutes":"20"},{"activityLevel":"VIGOROUS","minutes":"10"}]
 		}}]}`,
+		"rollup:floors":             `{"rollupDataPoints":[{"civilStartTime":{"date":{"year":2026,"month":7,"day":30}},"civilEndTime":{"date":{"year":2026,"month":7,"day":31}},"floors":{"floorsSum":8.0}}]}`,
+		"list:altitude":             `{"dataPoints":[{"dataSource":{},"altitude":{"interval":{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T11:00:00Z"},"gainMillimeters":"12000"}}]}`,
+		"list:sedentary-period":     `{"dataPoints":[{"dataSource":{},"sedentaryPeriod":{"interval":{"startTime":"2026-07-30T14:00:00Z","endTime":"2026-07-30T15:30:00Z"}}}]}`,
+		"list:active-energy-burned": `{"dataPoints":[{"dataSource":{},"activeEnergyBurned":{"interval":{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T11:00:00Z"},"kcal":210.5}}]}`,
+		"list:vo2-max":              `{"dataPoints":[{"dataSource":{},"vo2Max":{"sampleTime":{"physicalTime":"2026-07-30T12:00:00Z"},"vo2MaxMillilitersPerKilogramPerMinute":41.2}}]}`,
+		"list:run-vo2-max":          `{"dataPoints":[{"dataSource":{},"runVo2Max":{"sampleTime":{"physicalTime":"2026-07-30T12:00:00Z"},"mlPerKgPerMin":42.8}}]}`,
+		"list:daily-heart-rate-zones": `{"dataPoints":[{"dataSource":{},"dailyHeartRateZones":{
+			"date":{"year":2026,"month":7,"day":30},
+			"heartRateZones":[{"heartRateZoneType":"LIGHT","minBeatsPerMinute":"30","maxBeatsPerMinute":"120"}]
+		}}]}`,
+		"list:daily-sleep-temperature-derivations": `{"dataPoints":[{"dataSource":{},"dailySleepTemperatureDerivations":{
+			"date":{"year":2026,"month":7,"day":30},
+			"nightlyTemperatureCelsius":36.1,"baselineTemperatureCelsius":36.4,"relativeNightlyStddev30dCelsius":0.2
+		}}]}`,
+		"list:time-in-heart-rate-zone": `{"dataPoints":[
+			{"dataSource":{},"timeInHeartRateZone":{"interval":{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T10:30:00Z"},"heartRateZone":"MODERATE","durationMillis":"600000"}},
+			{"dataSource":{},"timeInHeartRateZone":{"interval":{"startTime":"2026-07-30T10:30:00Z","endTime":"2026-07-30T10:40:00Z"},"heartRateZone":"MODERATE","durationMillis":"300000"}}
+		]}`,
+		"list:calories-in-heart-rate-zone": `{"dataPoints":[{"dataSource":{},"caloriesInHeartRateZone":{"interval":{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T10:30:00Z"},"heartRateZone":"MODERATE","kcal":45.0}}]}`,
+		"list:respiratory-rate-sleep-summary": `{"dataPoints":[{"dataSource":{},"respiratoryRateSleepSummary":{
+			"sampleTime":{"physicalTime":"2026-07-30T08:30:00Z"},
+			"deepSleepStats":{"breathsPerMinute":14.0},"lightSleepStats":{"breathsPerMinute":15.0},
+			"remSleepStats":{"breathsPerMinute":16.0},"fullSleepStats":{"breathsPerMinute":15.0}
+		}}]}`,
 		"list:heart-rate": `{"dataPoints":[
 			{"dataSource":{},"heartRate":{"sampleTime":{"physicalTime":"2026-07-30T10:15:00Z"},"beatsPerMinute":"70"}},
 			{"dataSource":{},"heartRate":{"sampleTime":{"physicalTime":"2026-07-30T10:30:00Z"},"beatsPerMinute":"90"}}
@@ -141,15 +165,23 @@ func TestSyncDayFullDayPopulatesEveryTable(t *testing.T) {
 	}
 
 	// watch_daily_summary
-	var stepsTotal, activeMinutes int64
-	var distanceM, totalCalories, restingHR, hrMin, hrMax, hrAvg, hrvAvg, spo2Avg, spo2Min, respRate float64
+	var stepsTotal, activeMinutes, floorsClimbed, lightMin, moderateMin, vigorousMin, sedentaryMin int64
+	var distanceM, kcalBurnedGoogle, restingHR, hrMin, hrMax, hrAvg, hrvAvg, spo2Avg, spo2Min, respRate float64
+	var altitudeGainM, activeEnergyKcal, vo2MaxSample, vo2MaxRunSample float64
+	var sleepTempC, sleepTempBaselineC float64
 	var sleepMinutes int64
-	err = db.QueryRow(`SELECT steps_total, distance_m, active_minutes, total_calories,
+	err = db.QueryRow(`SELECT steps_total, distance_m, active_minutes, kcal_burned_google,
 		resting_heart_rate_bpm, heart_rate_min_bpm, heart_rate_max_bpm, heart_rate_avg_bpm,
-		hrv_avg_ms, spo2_avg_pct, spo2_min_pct, respiratory_rate_avg_bpm, sleep_duration_minutes
+		hrv_avg_ms, spo2_avg_pct, spo2_min_pct, respiratory_rate_avg_bpm, sleep_duration_minutes,
+		floors_climbed, light_active_minutes, moderate_active_minutes, vigorous_active_minutes,
+		sedentary_minutes, altitude_gain_m, active_energy_burned_kcal, vo2_max_sample, vo2_max_run_sample,
+		sleep_temperature_c, sleep_temperature_baseline_c
 		FROM watch_daily_summary WHERE day = '2026-07-30'`).
-		Scan(&stepsTotal, &distanceM, &activeMinutes, &totalCalories, &restingHR, &hrMin, &hrMax, &hrAvg,
-			&hrvAvg, &spo2Avg, &spo2Min, &respRate, &sleepMinutes)
+		Scan(&stepsTotal, &distanceM, &activeMinutes, &kcalBurnedGoogle, &restingHR, &hrMin, &hrMax, &hrAvg,
+			&hrvAvg, &spo2Avg, &spo2Min, &respRate, &sleepMinutes,
+			&floorsClimbed, &lightMin, &moderateMin, &vigorousMin,
+			&sedentaryMin, &altitudeGainM, &activeEnergyKcal, &vo2MaxSample, &vo2MaxRunSample,
+			&sleepTempC, &sleepTempBaselineC)
 	if err != nil {
 		t.Fatalf("querying watch_daily_summary: %v", err)
 	}
@@ -162,8 +194,8 @@ func TestSyncDayFullDayPopulatesEveryTable(t *testing.T) {
 	if activeMinutes != 30 {
 		t.Errorf("active_minutes = %d, want 30", activeMinutes)
 	}
-	if totalCalories != 2103.5 {
-		t.Errorf("total_calories = %v, want 2103.5", totalCalories)
+	if kcalBurnedGoogle != 2103.5 {
+		t.Errorf("kcal_burned_google = %v, want 2103.5", kcalBurnedGoogle)
 	}
 	if restingHR != 62 {
 		t.Errorf("resting_heart_rate_bpm = %v, want 62", restingHR)
@@ -182,6 +214,63 @@ func TestSyncDayFullDayPopulatesEveryTable(t *testing.T) {
 	}
 	if sleepMinutes != 400 {
 		t.Errorf("sleep_duration_minutes = %d, want 400", sleepMinutes)
+	}
+	if floorsClimbed != 8 {
+		t.Errorf("floors_climbed = %d, want 8", floorsClimbed)
+	}
+	if lightMin != 0 || moderateMin != 20 || vigorousMin != 10 {
+		t.Errorf("light/moderate/vigorous active minutes = %d/%d/%d, want 0/20/10", lightMin, moderateMin, vigorousMin)
+	}
+	if sedentaryMin != 90 {
+		t.Errorf("sedentary_minutes = %d, want 90", sedentaryMin)
+	}
+	if altitudeGainM != 12 {
+		t.Errorf("altitude_gain_m = %v, want 12", altitudeGainM)
+	}
+	if activeEnergyKcal != 210.5 {
+		t.Errorf("active_energy_burned_kcal = %v, want 210.5", activeEnergyKcal)
+	}
+	if vo2MaxSample != 41.2 {
+		t.Errorf("vo2_max_sample = %v, want 41.2", vo2MaxSample)
+	}
+	if vo2MaxRunSample != 42.8 {
+		t.Errorf("vo2_max_run_sample = %v, want 42.8", vo2MaxRunSample)
+	}
+	if sleepTempC != 36.1 || sleepTempBaselineC != 36.4 {
+		t.Errorf("sleep temperature/baseline = %v/%v, want 36.1/36.4", sleepTempC, sleepTempBaselineC)
+	}
+
+	// watch_heart_rate_zone_definition / _minutes, watch_calories_by_zone
+	var minBpm, maxBpm int64
+	if err := db.QueryRow(`SELECT min_bpm, max_bpm FROM watch_heart_rate_zone_definition WHERE day='2026-07-30' AND zone_type='LIGHT'`).Scan(&minBpm, &maxBpm); err != nil {
+		t.Fatalf("querying watch_heart_rate_zone_definition: %v", err)
+	}
+	if minBpm != 30 || maxBpm != 120 {
+		t.Errorf("LIGHT zone min/max = %d/%d, want 30/120", minBpm, maxBpm)
+	}
+	var zoneMinutes float64
+	if err := db.QueryRow(`SELECT minutes FROM watch_heart_rate_zone_minutes WHERE day='2026-07-30' AND zone_type='MODERATE'`).Scan(&zoneMinutes); err != nil {
+		t.Fatalf("querying watch_heart_rate_zone_minutes: %v", err)
+	}
+	if zoneMinutes != 15 {
+		t.Errorf("MODERATE zone minutes = %v, want 15 (10+5 from two intervals)", zoneMinutes)
+	}
+	var zoneKcal float64
+	if err := db.QueryRow(`SELECT kcal FROM watch_calories_by_zone WHERE day='2026-07-30' AND zone_type='MODERATE'`).Scan(&zoneKcal); err != nil {
+		t.Fatalf("querying watch_calories_by_zone: %v", err)
+	}
+	if zoneKcal != 45.0 {
+		t.Errorf("MODERATE zone kcal = %v, want 45", zoneKcal)
+	}
+
+	// watch_sleep_session: per-stage respiratory rate, matched by sample time
+	var deepResp, lightResp, remResp, fullResp float64
+	if err := db.QueryRow(`SELECT deep_resp_rate_bpm, light_resp_rate_bpm, rem_resp_rate_bpm, full_resp_rate_bpm FROM watch_sleep_session WHERE day='2026-07-30'`).
+		Scan(&deepResp, &lightResp, &remResp, &fullResp); err != nil {
+		t.Fatalf("querying sleep session respiratory rate: %v", err)
+	}
+	if deepResp != 14.0 || lightResp != 15.0 || remResp != 16.0 || fullResp != 15.0 {
+		t.Errorf("sleep session resp rates deep/light/rem/full = %v/%v/%v/%v, want 14/15/16/15", deepResp, lightResp, remResp, fullResp)
 	}
 
 	// watch_steps_hourly: two buckets, at whatever local hour the fixture

@@ -45,6 +45,14 @@ func Init(encPath, workPath string, key crypto.Key) error {
 		os.Remove(workPath)
 		return fmt.Errorf("applying schema: %w", err)
 	}
+	// Schema is already at the shape every migration in Migrations produces,
+	// so a fresh database starts at the latest version directly rather than
+	// replaying history it was never behind on.
+	if _, err := conn.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, len(Migrations))); err != nil {
+		conn.Close()
+		os.Remove(workPath)
+		return fmt.Errorf("setting schema version: %w", err)
+	}
 	if err := conn.Close(); err != nil {
 		return fmt.Errorf("closing new database: %w", err)
 	}
@@ -105,7 +113,47 @@ func openWorkingFile(encPath, workPath string, key crypto.Key) (*Store, error) {
 		conn.Close()
 		return nil, fmt.Errorf("configuring working file %s: %w", workPath, err)
 	}
-	return &Store{encPath: encPath, workPath: workPath, key: key, conn: conn}, nil
+	s := &Store{encPath: encPath, workPath: workPath, key: key, conn: conn}
+	if err := s.migrate(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("migrating working file %s: %w", workPath, err)
+	}
+	return s, nil
+}
+
+// migrate applies any pending entries from Migrations (see migrations.go),
+// tracked via PRAGMA user_version. A database already at the latest version
+// (including every fresh Init, which sets it directly) is a no-op.
+func (s *Store) migrate() error {
+	var version int
+	if err := s.conn.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return fmt.Errorf("reading schema version: %w", err)
+	}
+	for i := version; i < len(Migrations); i++ {
+		if err := s.applyMigration(i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) applyMigration(i int) error {
+	tx, err := s.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning migration %d: %w", i, err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+
+	if _, err := tx.Exec(Migrations[i]); err != nil {
+		return fmt.Errorf("applying migration %d: %w", i, err)
+	}
+	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, i+1)); err != nil {
+		return fmt.Errorf("bumping schema version to %d: %w", i+1, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing migration %d: %w", i, err)
+	}
+	return nil
 }
 
 // DB returns the underlying *sql.DB for queries.

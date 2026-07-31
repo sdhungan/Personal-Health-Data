@@ -54,6 +54,14 @@ func journalBeaconURL(day string) string {
 	return APIURL("journal/beacon", url.Values{"day": {day}})
 }
 
+func bodyMeasurementSaveURL(day string) string {
+	return APIURL("body-measurement", url.Values{"day": {day}})
+}
+
+func bodyMeasurementCarryForwardURL(day string) string {
+	return APIURL("body-measurement/carry-forward", url.Values{"day": {day}})
+}
+
 func boolJS(b bool) string {
 	if b {
 		return "true"

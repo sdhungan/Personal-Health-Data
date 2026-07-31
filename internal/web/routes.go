@@ -25,4 +25,6 @@ func (s *Server) registerRoutes() {
 	api.POST("/sync", s.handleForceSync)
 	api.POST("/journal", s.handleJournalSave)
 	api.POST("/journal/beacon", s.handleJournalBeacon)
+	api.POST("/body-measurement", s.handleBodyMeasurementSave)
+	api.POST("/body-measurement/carry-forward", s.handleBodyMeasurementCarryForward)
 }
