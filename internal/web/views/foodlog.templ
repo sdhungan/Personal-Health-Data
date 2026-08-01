@@ -1,0 +1,66 @@
+package views
+
+import "fmt"
+
+// FoodServingDetailFragment and FoodServingDetailError both render into
+// #detail-panel (inside the shared detail overlay in layout.templ, also
+// used by activities — see activities.templ), so an SSE patch of either
+// always lands in the same place.
+templ FoodServingDetailFragment(d FoodServingDetail) {
+	<div id="detail-panel">
+		<h2>{ d.FoodName }</h2>
+		<div class="detail-meta">
+			<div><span class="label">Time</span><span>{ d.TimeLabel }</span></div>
+			if d.QuantityLabel != "" {
+				<div><span class="label">Quantity</span><span>{ d.QuantityLabel }</span></div>
+			}
+			<div><span class="label">Calories</span><span>{ fmt.Sprintf("%.0f kcal", d.EnergyKcal) }</span></div>
+		</div>
+		<div class="detail-stats-row">
+			if d.ProteinG != nil {
+				@foodStat("Protein", *d.ProteinG)
+			}
+			if d.CarbsG != nil {
+				@foodStat("Carbs", *d.CarbsG)
+			}
+			if d.FatG != nil {
+				@foodStat("Fat", *d.FatG)
+			}
+			if d.FiberG != nil {
+				@foodStat("Fiber", *d.FiberG)
+			}
+			if d.SugarsG != nil {
+				@foodStat("Sugars", *d.SugarsG)
+			}
+			if d.SaturatedG != nil {
+				@foodStat("Saturated Fat", *d.SaturatedG)
+			}
+			if d.SodiumMg != nil {
+				@foodStatMg("Sodium", *d.SodiumMg)
+			}
+			if d.CholesterolMg != nil {
+				@foodStatMg("Cholesterol", *d.CholesterolMg)
+			}
+		</div>
+	</div>
+}
+
+templ foodStat(label string, grams float64) {
+	<div class="detail-stat">
+		<span class="detail-stat-value">{ fmt.Sprintf("%.0fg", grams) }</span>
+		<span class="detail-stat-label">{ label }</span>
+	</div>
+}
+
+templ foodStatMg(label string, mg float64) {
+	<div class="detail-stat">
+		<span class="detail-stat-value">{ fmt.Sprintf("%.0fmg", mg) }</span>
+		<span class="detail-stat-label">{ label }</span>
+	</div>
+}
+
+templ FoodServingDetailError(message string) {
+	<div id="detail-panel">
+		<p class="journal-error">{ message }</p>
+	</div>
+}

@@ -18,11 +18,11 @@ templ Page(data DashboardData) {
 			<main class="main">
 				@DataViewBody(data)
 			</main>
-			<div id="activity-overlay" class="overlay" data-show="$activityOpen" style="display:none">
-				<div class="overlay-backdrop" data-on:click="$activityOpen = false"></div>
+			<div id="detail-overlay" class="overlay" data-show="$detailOpen" style="display:none">
+				<div class="overlay-backdrop" data-on:click="$detailOpen = false"></div>
 				<div class="overlay-panel">
-					<button class="overlay-close" data-on:click="$activityOpen = false">&times;</button>
-					<div id="activity-detail"></div>
+					<button class="overlay-close" data-on:click="$detailOpen = false">&times;</button>
+					<div id="detail-panel"></div>
 				</div>
 			</div>
 		</body>
@@ -73,7 +73,23 @@ templ ViewTabs(data DashboardData) {
 templ DayNav(data DashboardData) {
 	<div class="day-nav">
 		<button class="day-nav-btn" data-on:click={ getExpr(viewURL(data.PrevDay, data.View)) }>&lsaquo;</button>
-		<span class="day-nav-label">{ data.DayLabel }</span>
+		<button
+			type="button"
+			class="day-nav-label"
+			title="Pick a date"
+			data-on:click="document.getElementById('day-picker-input').showPicker()"
+		>
+			{ data.DayLabel }
+		</button>
+		<input
+			type="date"
+			id="day-picker-input"
+			class="day-picker-input"
+			value={ data.Day }
+			data-on:change={ dayPickerChangeExpr(data.View) }
+			tabindex="-1"
+			aria-hidden="true"
+		/>
 		<button class="day-nav-btn" data-on:click={ getExpr(viewURL(data.NextDay, data.View)) }>&rsaquo;</button>
 		@SyncButton(data.Day, data.View, false)
 	</div>

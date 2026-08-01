@@ -23,10 +23,13 @@ func renderBarChartSVG(c ChartData, id string) string {
 	plotW := float64(width - leftAxis - 10)
 	plotH := float64(height - bottomAxis - topPad)
 
-	maxVal := 0.0
+	maxVal, minVal := 0.0, 0.0
 	for _, v := range c.Values {
 		if v > maxVal {
 			maxVal = v
+		}
+		if v < minVal {
+			minVal = v
 		}
 	}
 	if c.Goal != nil && *c.Goal > maxVal {
@@ -37,7 +40,16 @@ func renderBarChartSVG(c ChartData, id string) string {
 	}
 	// Round the axis ceiling up to a "nice" number so the top gridline
 	// reads cleanly (matches the reference dashboard's "40000" style).
+	// axisMin stays 0 for the common case (steps, calories, etc. never go
+	// negative) — only series like caloric deficit/surplus dip below zero,
+	// so the floor is rounded the same "nice" way, and the plotted range
+	// becomes [axisMin, axisMax] instead of always [0, axisMax].
 	axisMax := niceCeiling(maxVal)
+	axisMin := 0.0
+	if minVal < 0 {
+		axisMin = -niceCeiling(-minVal)
+	}
+	axisRange := axisMax - axisMin
 
 	n := len(c.Values)
 	if n == 0 {
@@ -45,6 +57,9 @@ func renderBarChartSVG(c ChartData, id string) string {
 	}
 	barGap := plotW / float64(n) * 0.25
 	barW := plotW/float64(n) - barGap
+
+	valueToY := func(v float64) float64 { return topPad + plotH*(axisMax-v)/axisRange }
+	zeroY := valueToY(0)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, `<div class="chart-wrap" data-signals="%s">`, escapeAttr(chartWrapSignals(id)))
@@ -58,29 +73,41 @@ func renderBarChartSVG(c ChartData, id string) string {
 	fmt.Fprintf(&b, `<line x1="%d" y1="%d" x2="%d" y2="%d" class="chart-axis"/>`,
 		leftAxis, height-bottomAxis, width-5, height-bottomAxis)
 	for _, frac := range []float64{0.25, 0.5, 0.75} {
-		gy := topPad + plotH*(1-frac)
+		v := axisMin + axisRange*frac
+		gy := valueToY(v)
 		fmt.Fprintf(&b, `<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" class="chart-gridline"/>`, leftAxis, gy, width-5, gy)
-		fmt.Fprintf(&b, `<text x="0" y="%.1f" class="chart-axis-label">%s</text>`, gy+3, formatAxisNumber(axisMax*frac))
+		fmt.Fprintf(&b, `<text x="0" y="%.1f" class="chart-axis-label">%s</text>`, gy+3, formatAxisNumber(v))
 	}
 	fmt.Fprintf(&b, `<text x="0" y="%d" class="chart-axis-label">%s</text>`, int(topPad)+6, formatAxisNumber(axisMax))
-	fmt.Fprintf(&b, `<text x="0" y="%d" class="chart-axis-label">0</text>`, height-bottomAxis+4)
+	fmt.Fprintf(&b, `<text x="0" y="%d" class="chart-axis-label">%s</text>`, height-bottomAxis+4, formatAxisNumber(axisMin))
+
+	// Explicit zero baseline once the range dips below zero — bars anchor
+	// here instead of the bottom edge, so it needs to read clearly as "0",
+	// distinct from the plot's own bottom border.
+	if axisMin < 0 {
+		fmt.Fprintf(&b, `<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" class="chart-axis"/>`, leftAxis, zeroY, width-5, zeroY)
+	}
 
 	// Goal line.
 	if c.Goal != nil {
-		goalY := topPad + plotH*(1-*c.Goal/axisMax)
+		goalY := valueToY(*c.Goal)
 		fmt.Fprintf(&b, `<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" class="chart-goal-line"/>`,
 			leftAxis, goalY, width-5, goalY)
 		fmt.Fprintf(&b, `<text x="%d" y="%.1f" class="chart-goal-label">Goal: %s</text>`,
 			width-140, goalY-6, formatAxisNumber(*c.Goal))
 	}
 
-	// Bars, each a discrete hover target — snapping the crosshair/tooltip
-	// straight to the exact value is more precise for "read the exact
-	// measurement" than a free-floating continuous crosshair would be.
+	// Bars, each anchored at the zero baseline and extending up (positive
+	// values) or down (negative values) from it, and each a discrete hover
+	// target — snapping the crosshair/tooltip straight to the exact value
+	// is more precise for "read the exact measurement" than a
+	// free-floating continuous crosshair would be.
 	for i, v := range c.Values {
 		x := float64(leftAxis) + float64(i)*(barW+barGap) + barGap/2
-		barH := plotH * (v / axisMax)
-		y := topPad + plotH - barH
+		top := valueToY(max(v, 0))
+		bottom := valueToY(min(v, 0))
+		barH := bottom - top
+		y := top
 		label := ""
 		if i < len(c.Labels) {
 			label = c.Labels[i]
@@ -317,12 +344,13 @@ func renderSparklineSVG(values []float64) string {
 // renderStageTimelineSVG renders a segmented horizontal bar — one rect per
 // sleep stage, colored by stage type via CSS (see style.css's .stage-*
 // classes) — a lightweight hypnogram, not a full sleep-chart library.
-func renderStageTimelineSVG(stages []StageSegment) string {
+func renderStageTimelineSVG(stages []StageSegment, id string) string {
 	const width, height = 480, 36
 	if len(stages) == 0 {
 		return ""
 	}
 	var b strings.Builder
+	fmt.Fprintf(&b, `<div class="chart-wrap" data-signals="%s">`, escapeAttr(chartWrapSignals(id)))
 	fmt.Fprintf(&b, `<svg viewBox="0 0 %d %d" class="chart-svg stage-timeline" preserveAspectRatio="none">`, width, height)
 	for _, s := range stages {
 		start := clampPct(s.StartPct) * width
@@ -331,10 +359,13 @@ func renderStageTimelineSVG(stages []StageSegment) string {
 		if w < 0 {
 			w = 0
 		}
-		fmt.Fprintf(&b, `<rect x="%.1f" y="0" width="%.1f" height="%d" class="stage-seg stage-%s"/>`,
-			start, w, height, strings.ToLower(s.Type))
+		xpct := (start + w/2) / width * 100
+		fmt.Fprintf(&b, `<rect x="%.1f" y="0" width="%.1f" height="%d" class="stage-seg stage-%s" %s/>`,
+			start, w, height, strings.ToLower(s.Type), hoverAttrs(id, xpct, 50, s.TimeLabel, humanizeStageType(s.Type)))
 	}
 	b.WriteString(`</svg>`)
+	b.WriteString(renderChartOverlay(id))
+	b.WriteString(`</div>`)
 	return b.String()
 }
 

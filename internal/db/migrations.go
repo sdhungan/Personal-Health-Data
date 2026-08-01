@@ -11,7 +11,8 @@ package db
 // len(Migrations), skipping this list entirely — these are only for
 // upgrading a database that already has data in it.
 //
-// Empty as of the watch_* schema redesign (see cronometer-integration.md):
+// Empty as of the watch_* schema redesign (see ARCHITECTURE.md's "Data
+// model: five fixed representation shapes" section, and prerequisite.md):
 // this project is still in early development with no real deployed
 // database to preserve, so that redesign went straight into schema.sql
 // instead of an upgrade path — re-run "healthd db init" against a fresh

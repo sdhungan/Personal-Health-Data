@@ -90,14 +90,17 @@ type StatItem struct {
 	Value string
 }
 
-// StageSegment is one sleep stage's span within its session, expressed as a
-// 0..1 fraction of the session's total duration so it can be drawn as a
-// segment of a fixed-width timeline bar regardless of the session's actual
-// length.
+// StageSegment is one sleep stage's span within its session, or one
+// activity-level span within a day, expressed as a 0..1 fraction of the
+// total duration so it can be drawn as a segment of a fixed-width timeline
+// bar regardless of the session's/day's actual length. TimeLabel is the
+// caller's pre-formatted actual clock-time range (the renderer only has the
+// fraction, not the underlying time.Time) shown on hover alongside Type.
 type StageSegment struct {
-	Type     string // AWAKE | LIGHT | DEEP | REM
-	StartPct float64
-	EndPct   float64
+	Type      string // AWAKE | LIGHT | DEEP | REM, or SEDENTARY | LIGHTLY_ACTIVE | MODERATELY_ACTIVE | VERY_ACTIVE
+	StartPct  float64
+	EndPct    float64
+	TimeLabel string
 }
 
 // BodyMeasurementData is the editable weight/waist/neck form for one day.
@@ -153,8 +156,10 @@ type HRSample struct {
 // cronometer_serving entry. QuantityLabel is pre-formatted ("150 g", "1
 // cup") since quantity_units is only known when Cronometer's own food
 // lookup succeeded (see internal/cronometer's sync — unresolved foods have
-// no quantity/units, only grams-implied nutrients).
+// no quantity/units, only grams-implied nutrients). ID drives the click-to-detail
+// popup (see FoodServingDetail), the same pattern ActivitySummary.ID does.
 type ServingSummary struct {
+	ID            int64
 	TimeLabel     string
 	FoodName      string
 	QuantityLabel string
@@ -162,6 +167,25 @@ type ServingSummary struct {
 	ProteinG      *float64
 	CarbsG        *float64
 	FatG          *float64
+}
+
+// FoodServingDetail is the full overlay view for one cronometer_serving row
+// — the same click-to-detail popup pattern ActivityDetail uses, showing a
+// handful of the most commonly-relevant nutrients beyond the four already
+// visible in the food-log list, when Cronometer's food lookup provided them.
+type FoodServingDetail struct {
+	FoodName      string
+	TimeLabel     string
+	QuantityLabel string
+	EnergyKcal    float64
+	ProteinG      *float64
+	CarbsG        *float64
+	FatG          *float64
+	FiberG        *float64
+	SugarsG       *float64
+	SaturatedG    *float64
+	SodiumMg      *float64
+	CholesterolMg *float64
 }
 
 // JournalData is the state of the journal editor for one day.

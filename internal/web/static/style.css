@@ -89,7 +89,33 @@ body {
   border-radius: 999px;
 }
 .day-nav-btn:hover { background: var(--tile-bg-hover); }
-.day-nav-label { font-size: 1.05rem; font-weight: 600; flex: 1; }
+.day-nav-label {
+  font-size: 1.05rem;
+  font-weight: 600;
+  flex: 1;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: inherit;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+}
+.day-nav-label:hover { background: var(--tile-bg-hover); }
+
+/* Native date input, kept functional (so showPicker() works) but visually
+   hidden — the day-nav-label button is the visible control that opens it. */
+.day-picker-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+  opacity: 0;
+  pointer-events: none;
+}
 
 .sync-btn {
   margin-left: auto;
@@ -153,6 +179,16 @@ body {
 .tile-wide { grid-column: span 2; }
 .tile-expanded { grid-column: 1 / -1; }
 
+/* Nutrition section: two explicit rows (kcal metrics, then macros) instead
+   of leaving them to whatever the general dashboard-grid's auto-fill
+   happens to wrap into at the current viewport width. */
+.nutrition-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
 .tile-header {
   display: flex;
   align-items: center;
@@ -201,7 +237,10 @@ body {
 .tile-stat-header { margin-bottom: 4px; }
 .tile-stat-sub { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 6px; }
 
-.chart-wrap { position: relative; }
+/* max-width keeps a small trend/hourly chart from ballooning in height when
+   its tile happens to sit in a wide row — width:100% inside that cap still
+   shrinks it responsively on narrower tiles/screens. */
+.chart-wrap { position: relative; max-width: 560px; }
 .chart-svg { width: 100%; height: auto; display: block; }
 .chart-axis { stroke: var(--border); stroke-width: 1; }
 .chart-gridline { stroke: var(--text); stroke-width: 1; opacity: 0.08; }
@@ -210,7 +249,14 @@ body {
 .chart-bar-label { fill: var(--text-dim); font-size: 9px; text-anchor: middle; }
 .chart-goal-line { stroke: #4caf50; stroke-dasharray: 4 3; }
 .chart-goal-label { fill: var(--text-dim); font-size: 9px; }
-.chart-line { fill: none; stroke: var(--tile-accent, var(--accent)); stroke-width: 2; pointer-events: none; }
+.chart-line {
+  fill: none;
+  stroke: var(--tile-accent, var(--accent));
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
 .chart-hit-target { fill: transparent; cursor: crosshair; }
 
 /* ---- Grafana-style hover crosshair + tooltip (pure Datastar, no JS lib) ---- */
@@ -250,7 +296,7 @@ body {
 .detail-stat-label { color: var(--text-dim); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; }
 
 .stage-timeline { border-radius: 6px; overflow: hidden; }
-.stage-seg { }
+.stage-seg { cursor: crosshair; }
 .stage-awake    { fill: #ff9f0a; }
 .stage-light    { fill: #64d2ff; }
 .stage-deep     { fill: #5e5ce6; }
@@ -258,6 +304,14 @@ body {
 .stage-moderate { fill: #ff9f0a; }
 .stage-vigorous { fill: #ff375f; }
 .stage-peak     { fill: #e5484d; }
+
+/* Activity-level segments (watch_activity_level_segment) — an
+   intensity ramp from resting gray up through red, distinct from the
+   sleep-stage palette above since both can appear on the same page. */
+.stage-sedentary         { fill: #48484a; }
+.stage-lightly_active    { fill: #64d2ff; }
+.stage-moderately_active { fill: #ff9f0a; }
+.stage-very_active       { fill: #ff375f; }
 
 .stage-legend { display: flex; gap: 14px; margin-top: 8px; flex-wrap: wrap; }
 .stage-legend-item { display: flex; align-items: center; gap: 5px; font-size: 0.8rem; color: var(--text-dim); }
@@ -269,6 +323,10 @@ body {
 .stage-dot.stage-moderate { background: #ff9f0a; }
 .stage-dot.stage-vigorous { background: #ff375f; }
 .stage-dot.stage-peak     { background: #e5484d; }
+.stage-dot.stage-sedentary         { background: #48484a; }
+.stage-dot.stage-lightly_active    { background: #64d2ff; }
+.stage-dot.stage-moderately_active { background: #ff9f0a; }
+.stage-dot.stage-very_active       { background: #ff375f; }
 
 /* ---- Activities / workouts list ---- */
 
@@ -359,8 +417,8 @@ body {
   font-size: 1.5rem;
   cursor: pointer;
 }
-.activity-detail-meta { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 12px 0; }
-.activity-detail-meta .label { display: block; color: var(--text-dim); font-size: 0.8rem; }
+.detail-meta { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 12px 0; }
+.detail-meta .label { display: block; color: var(--text-dim); font-size: 0.8rem; }
 
 /* ---- Journal ---- */
 

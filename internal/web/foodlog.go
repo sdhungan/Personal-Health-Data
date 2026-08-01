@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -24,10 +25,19 @@ func buildFoodLogTile(ctx context.Context, db *sql.DB, t views.TileData, day tim
 		rangeStart = day.AddDate(0, 0, -6)
 	}
 
+	// Plain water servings are zero-calorie hydration logging, not food —
+	// they just crowd out the actual meals in this list, so they're
+	// excluded here (display only; the nutrition/energy tiles still read
+	// from cronometer_daily_nutrition, Cronometer's own rollup, untouched
+	// by this filter). Matches "Water" and comma-separated variants Cronometer's
+	// food database uses ("Water, sparkling", "Water, tap, drinking") without
+	// catching unrelated foods that merely start with "water" ("Watermelon").
 	rows, err := db.QueryContext(ctx, `
-		SELECT recorded_time, food_name, quantity_value, quantity_units, energy_kcal, protein_g, carbs_g, fat_g
+		SELECT id, recorded_time, food_name, quantity_value, quantity_units, energy_kcal, protein_g, carbs_g, fat_g
 		FROM cronometer_serving
 		WHERE day BETWEEN ? AND ?
+		  AND LOWER(TRIM(food_name)) != 'water'
+		  AND LOWER(TRIM(food_name)) NOT LIKE 'water,%'
 		ORDER BY recorded_time DESC
 	`, rangeStart.Format(dateLayout), day.Format(dateLayout))
 	if err != nil {
@@ -36,14 +46,15 @@ func buildFoodLogTile(ctx context.Context, db *sql.DB, t views.TileData, day tim
 	defer rows.Close()
 
 	for rows.Next() {
+		var id int64
 		var recordedTime, foodName string
 		var quantityValue, energyKcal, proteinG, carbsG, fatG sql.NullFloat64
 		var quantityUnits sql.NullString
-		if err := rows.Scan(&recordedTime, &foodName, &quantityValue, &quantityUnits, &energyKcal, &proteinG, &carbsG, &fatG); err != nil {
+		if err := rows.Scan(&id, &recordedTime, &foodName, &quantityValue, &quantityUnits, &energyKcal, &proteinG, &carbsG, &fatG); err != nil {
 			return t, fmt.Errorf("scanning cronometer_serving row: %w", err)
 		}
 
-		s := views.ServingSummary{FoodName: foodName, EnergyKcal: energyKcal.Float64}
+		s := views.ServingSummary{ID: id, FoodName: foodName, EnergyKcal: energyKcal.Float64}
 		// recorded_time is stored "YYYY-MM-DDTHH:MM:SS" in the account's own
 		// local wall-clock time (see internal/cronometer/sync_upsert.go's
 		// recordedTimeOf) -- parsed as a plain layout, not RFC3339/UTC.
@@ -68,4 +79,38 @@ func buildFoodLogTile(ctx context.Context, db *sql.DB, t views.TileData, day tim
 		t.FoodLog = append(t.FoodLog, s)
 	}
 	return t, rows.Err()
+}
+
+// fetchFoodServingDetail loads one cronometer_serving row's full detail for
+// the click-to-expand popup — the same handful of nutrients a nutrition
+// label highlights, beyond the four already visible in the list.
+func fetchFoodServingDetail(ctx context.Context, db *sql.DB, id int64) (*views.FoodServingDetail, error) {
+	var d views.FoodServingDetail
+	var recordedTime string
+	var quantityValue sql.NullFloat64
+	var quantityUnits sql.NullString
+	var energyKcal sql.NullFloat64
+
+	err := db.QueryRowContext(ctx, `
+		SELECT recorded_time, food_name, quantity_value, quantity_units, energy_kcal,
+		       protein_g, carbs_g, fat_g, fiber_g, sugars_g, saturated_g, sodium_mg, cholesterol_mg
+		FROM cronometer_serving
+		WHERE id = ?
+	`, id).Scan(&recordedTime, &d.FoodName, &quantityValue, &quantityUnits, &energyKcal,
+		&d.ProteinG, &d.CarbsG, &d.FatG, &d.FiberG, &d.SugarsG, &d.SaturatedG, &d.SodiumMg, &d.CholesterolMg)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("no food serving found for id %d", id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying cronometer_serving id %d: %w", id, err)
+	}
+
+	d.EnergyKcal = energyKcal.Float64
+	if ts, err := time.Parse("2006-01-02T15:04:05", recordedTime); err == nil {
+		d.TimeLabel = ts.Format("3:04 PM")
+	}
+	if quantityValue.Valid && quantityUnits.Valid {
+		d.QuantityLabel = fmt.Sprintf("%.0f %s", quantityValue.Float64, quantityUnits.String)
+	}
+	return &d, nil
 }

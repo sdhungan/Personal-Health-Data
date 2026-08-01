@@ -30,6 +30,15 @@ func viewURL(day, view string) string {
 	return APIURL("view", url.Values{"day": {day}, "view": {view}})
 }
 
+// dayPickerChangeExpr builds the date-picker input's change-handler
+// expression. Unlike the other nav URLs, the day segment can't be baked in
+// at render time — it's whatever the user just picked — so this leaves it
+// as a Datastar expression that reads the input's own value (`el.value`)
+// at click time instead of a Go-side string.
+func dayPickerChangeExpr(view string) string {
+	return "@get('" + APIURL("view", url.Values{"view": {view}}) + "&day=' + el.value)"
+}
+
 func tileURL(kind, day string, expanded bool) string {
 	return APIURL("tile", url.Values{"kind": {kind}, "day": {day}, "expanded": {fmt.Sprintf("%t", expanded)}})
 }
@@ -40,6 +49,10 @@ func syncURL(day, view string) string {
 
 func activityURL(id int64) string {
 	return APIURL("activity", url.Values{"id": {fmt.Sprintf("%d", id)}})
+}
+
+func foodServingURL(id int64) string {
+	return APIURL("food-serving", url.Values{"id": {fmt.Sprintf("%d", id)}})
 }
 
 func journalSaveURL(day string) string {
@@ -76,7 +89,7 @@ func boolJS(b bool) string {
 // initialSignals is the data-signals bootstrap for the outer <html>
 // element on a full page load.
 func initialSignals(day string) string {
-	b, _ := json.Marshal(map[string]any{"day": day, "view": "data", "activityOpen": false})
+	b, _ := json.Marshal(map[string]any{"day": day, "view": "data", "detailOpen": false})
 	return string(b)
 }
 

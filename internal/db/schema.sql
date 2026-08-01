@@ -71,8 +71,8 @@ CREATE TABLE sync_state (
 --
 -- Every table below follows one of five fixed shapes, chosen per data type
 -- by how its values are actually useful to look at (not just by what the
--- API can technically return) -- see cronometer-integration.md's sibling
--- discussion doc for the full reasoning per metric:
+-- API can technically return) -- see ARCHITECTURE.md's "Data model: five
+-- fixed representation shapes" section for the full reasoning per metric:
 --   1. DailyScalar     -- one column in watch_daily_summary, one row/day.
 --   2. DailyByCategory -- day+enum-category breakdown (watch_*_by_zone,
 --                         watch_*_by_level tables) -- e.g. minutes per

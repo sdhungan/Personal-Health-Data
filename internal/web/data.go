@@ -42,6 +42,7 @@ const dailySummaryColumns = `steps_total, distance_m, floors_climbed, altitude_g
 type dashboardDailyRow struct {
 	healthdata.DailySummary
 	NutritionEnergyKcal *float64
+	NutritionKcalBurned *float64 // cronometer_daily_nutrition.kcal_burned_cronometer — Cronometer's own BMR+activity+TEF estimate, not watch_daily_summary.kcal_burned_google
 	NutritionProteinG   *float64
 	NutritionCarbsG     *float64
 	NutritionFatG       *float64
@@ -73,8 +74,8 @@ func fetchDailySummaryRow(ctx context.Context, db *sql.DB, day string) (dashboar
 		return r, fmt.Errorf("querying watch_daily_summary for %s: %w", day, err)
 	}
 
-	err = db.QueryRowContext(ctx, `SELECT energy_kcal, protein_g, carbs_g, fat_g FROM cronometer_daily_nutrition WHERE day = ?`, day).
-		Scan(&r.NutritionEnergyKcal, &r.NutritionProteinG, &r.NutritionCarbsG, &r.NutritionFatG)
+	err = db.QueryRowContext(ctx, `SELECT energy_kcal, kcal_burned_cronometer, protein_g, carbs_g, fat_g FROM cronometer_daily_nutrition WHERE day = ?`, day).
+		Scan(&r.NutritionEnergyKcal, &r.NutritionKcalBurned, &r.NutritionProteinG, &r.NutritionCarbsG, &r.NutritionFatG)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return r, fmt.Errorf("querying cronometer_daily_nutrition for %s: %w", day, err)
 	}
@@ -111,20 +112,20 @@ func fetch7DayRows(ctx context.Context, db *sql.DB, endDay time.Time) (map[strin
 	// Merged in by day key, not a JOIN — a day can have nutrition data with
 	// no watch_daily_summary row at all (food logged, watch never synced),
 	// and this must not silently drop that day.
-	nutRows, err := db.QueryContext(ctx, `SELECT day, energy_kcal, protein_g, carbs_g, fat_g FROM cronometer_daily_nutrition WHERE day BETWEEN ? AND ?`, start, end)
+	nutRows, err := db.QueryContext(ctx, `SELECT day, energy_kcal, kcal_burned_cronometer, protein_g, carbs_g, fat_g FROM cronometer_daily_nutrition WHERE day BETWEEN ? AND ?`, start, end)
 	if err != nil {
 		return nil, fmt.Errorf("querying 7-day cronometer_daily_nutrition range: %w", err)
 	}
 	defer nutRows.Close()
 	for nutRows.Next() {
 		var day string
-		var energy, protein, carbs, fat *float64
-		if err := nutRows.Scan(&day, &energy, &protein, &carbs, &fat); err != nil {
+		var energy, burned, protein, carbs, fat *float64
+		if err := nutRows.Scan(&day, &energy, &burned, &protein, &carbs, &fat); err != nil {
 			return nil, fmt.Errorf("scanning cronometer_daily_nutrition row: %w", err)
 		}
 		r := out[day]
 		r.Day = day
-		r.NutritionEnergyKcal, r.NutritionProteinG, r.NutritionCarbsG, r.NutritionFatG = energy, protein, carbs, fat
+		r.NutritionEnergyKcal, r.NutritionKcalBurned, r.NutritionProteinG, r.NutritionCarbsG, r.NutritionFatG = energy, burned, protein, carbs, fat
 		out[day] = r
 	}
 	return out, nutRows.Err()
@@ -270,6 +271,30 @@ var metricDefs = map[string]metricDef{
 		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.NutritionEnergyKcal) },
 		Format:  fmtNoDec,
 	},
+	"nutrition_expenditure": {
+		Title: "Expenditure (Cronometer)", Icon: "apple", Category: "nutrition", Unit: "kcal", EmptyMsg: "No expenditure data",
+		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.NutritionKcalBurned) },
+		Format:  fmtNoDec,
+	},
+	"nutrition_deficit": {
+		// Cronometer's own convention: deficit = expenditure - consumption
+		// (positive means you burned more than you ate). Needs both sides
+		// present for the day, unlike the other nutrition tiles which only
+		// need their one column.
+		Title: "Deficit (Cronometer)", Icon: "apple", Category: "nutrition", Unit: "kcal", EmptyMsg: "No expenditure/consumption data",
+		Extract: func(r dashboardDailyRow) (float64, bool) {
+			burned, ok := fromFloat64(r.NutritionKcalBurned)
+			if !ok {
+				return 0, false
+			}
+			consumed, ok := fromFloat64(r.NutritionEnergyKcal)
+			if !ok {
+				return 0, false
+			}
+			return burned - consumed, true
+		},
+		Format: fmtNoDec,
+	},
 	"nutrition_protein": {
 		Title: "Protein", Icon: "apple", Category: "nutrition", Unit: "g", EmptyMsg: "No food logged",
 		Extract: func(r dashboardDailyRow) (float64, bool) { return fromFloat64(r.NutritionProteinG) },
@@ -297,7 +322,7 @@ var DefaultTileKinds = []string{
 	"body", "blood_glucose", "core_body_temp",
 	"sleep",
 	"spo2", "respiratory_rate", "vo2max",
-	"nutrition_energy", "nutrition_protein", "nutrition_carbs", "nutrition_fat", "food_log",
+	"nutrition_energy", "nutrition_expenditure", "nutrition_deficit", "nutrition_protein", "nutrition_carbs", "nutrition_fat", "food_log",
 }
 
 // buildStatTile builds one stat/sleep tile. Collapsed, every metric gets a
@@ -442,17 +467,10 @@ func buildHourlyStepsChart(hourly [24]int64) *views.ChartData {
 	return c
 }
 
+// hourLabel formats an hour-of-day (0-23) in 24h form ("00".."23") — plain
+// digits, no am/pm, matching every other time axis on the dashboard.
 func hourLabel(h int) string {
-	switch {
-	case h == 0:
-		return "12a"
-	case h < 12:
-		return fmt.Sprintf("%da", h)
-	case h == 12:
-		return "12p"
-	default:
-		return fmt.Sprintf("%dp", h-12)
-	}
+	return fmt.Sprintf("%02d", h)
 }
 
 // fetchHeartRateDetail builds the heart-rate tile's expanded detail: an
@@ -688,12 +706,13 @@ func buildActivityLevelSegmentTile(ctx context.Context, db *sql.DB, t views.Tile
 
 	dayStart := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
 	daySpan := 24 * time.Hour
-	d := &views.DetailData{Kind: "stages", RangeLabel: "12:00 AM – 11:59 PM"}
+	d := &views.DetailData{Kind: "stages", RangeLabel: "00:00 – 23:59"}
 	for _, s := range segments {
 		d.Stages = append(d.Stages, views.StageSegment{
-			Type:     s.Level,
-			StartPct: s.Start.Sub(dayStart).Seconds() / daySpan.Seconds(),
-			EndPct:   s.End.Sub(dayStart).Seconds() / daySpan.Seconds(),
+			Type:      s.Level,
+			StartPct:  s.Start.Sub(dayStart).Seconds() / daySpan.Seconds(),
+			EndPct:    s.End.Sub(dayStart).Seconds() / daySpan.Seconds(),
+			TimeLabel: s.Start.Local().Format("15:04") + " – " + s.End.Local().Format("15:04"),
 		})
 	}
 	for _, level := range []string{"SEDENTARY", "LIGHTLY_ACTIVE", "MODERATELY_ACTIVE", "VERY_ACTIVE"} {
@@ -759,9 +778,10 @@ func fetchSleepDetail(ctx context.Context, db *sql.DB, day time.Time) (*views.De
 			continue
 		}
 		d.Stages = append(d.Stages, views.StageSegment{
-			Type:     stageType,
-			StartPct: segStart.Sub(start).Seconds() / totalSpan,
-			EndPct:   segEnd.Sub(start).Seconds() / totalSpan,
+			Type:      stageType,
+			StartPct:  segStart.Sub(start).Seconds() / totalSpan,
+			EndPct:    segEnd.Sub(start).Seconds() / totalSpan,
+			TimeLabel: segStart.Local().Format("3:04 PM") + " – " + segEnd.Local().Format("3:04 PM"),
 		})
 	}
 	if err := rows.Err(); err != nil {

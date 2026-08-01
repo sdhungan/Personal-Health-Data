@@ -32,6 +32,18 @@ func parseDay(c echo.Context) time.Time {
 	return t
 }
 
+// defaultExpandedKind reports whether kind should render already-expanded
+// on a fresh dashboard load, rather than requiring a click every time — the
+// handful of tiles worth seeing in full by default.
+func defaultExpandedKind(kind string) bool {
+	switch kind {
+	case "steps", "heart_rate", "body", "sleep":
+		return true
+	default:
+		return false
+	}
+}
+
 func dayLabel(day time.Time) string {
 	now := time.Now()
 	d := day.Format(dateLayout)
@@ -68,7 +80,7 @@ func buildDashboardData(ctx context.Context, db *sql.DB, day time.Time, view str
 	}
 
 	for _, kind := range tileKinds {
-		t := views.TileData{ID: "tile-" + kind, Metric: kind, Expanded: kind == "steps"}
+		t := views.TileData{ID: "tile-" + kind, Metric: kind, Expanded: defaultExpandedKind(kind)}
 		switch {
 		case kind == "activities":
 			t, err = buildActivitiesTile(ctx, db, t, day, t.Expanded)
@@ -93,9 +105,31 @@ func buildDashboardData(ctx context.Context, db *sql.DB, day time.Time, view str
 		if err != nil {
 			return data, err
 		}
+		if shouldHideEmptyTile(t) {
+			continue
+		}
 		data.Tiles = append(data.Tiles, t)
 	}
 	return data, nil
+}
+
+// shouldHideEmptyTile reports whether t has no data at all for the day and
+// should be omitted from the dashboard entirely — rather than rendered as
+// an empty "No X recorded" placeholder — so the page only shows metrics
+// this account/watch actually produces. Body Measurements is exempt: it's
+// an input form, not a read-only stat, so it always needs to stay
+// reachable even before anything's been entered.
+func shouldHideEmptyTile(t views.TileData) bool {
+	switch t.Kind {
+	case views.TileKindBody:
+		return false
+	case views.TileKindActivities:
+		return len(t.Activities) == 0
+	case views.TileKindFoodLog:
+		return len(t.FoodLog) == 0
+	default:
+		return t.Empty
+	}
 }
 
 // handleIndex serves the full page on a normal (non-SSE) GET, always
@@ -359,6 +393,23 @@ func (s *Server) handleActivity(c echo.Context) error {
 		return sse.PatchElementTempl(views.ActivityDetailError(err.Error()))
 	}
 	return sse.PatchElementTempl(views.ActivityDetailFragment(*detail))
+}
+
+// handleFoodServing answers a click on a food-log list item, the same
+// detail-overlay pattern handleActivity uses (see #detail-panel/$detailOpen
+// in layout.templ).
+func (s *Server) handleFoodServing(c echo.Context) error {
+	id, err := parseInt64(c.QueryParam("id"))
+	if err != nil {
+		return c.String(http.StatusBadRequest, "invalid food serving id")
+	}
+
+	sse := datastar.NewSSE(c.Response(), c.Request())
+	detail, err := fetchFoodServingDetail(c.Request().Context(), s.DB, id)
+	if err != nil {
+		return sse.PatchElementTempl(views.FoodServingDetailError(err.Error()))
+	}
+	return sse.PatchElementTempl(views.FoodServingDetailFragment(*detail))
 }
 
 // handleJournalSave is the Datastar-driven autosave/manual-save path: it

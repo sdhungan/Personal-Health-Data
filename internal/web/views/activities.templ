@@ -3,12 +3,13 @@ package views
 import "fmt"
 
 // ActivityDetailFragment and ActivityDetailError both render into
-// #activity-detail (inside the overlay panel in layout.templ), so an SSE
-// patch of either always lands in the same place.
+// #detail-panel (inside the shared detail overlay in layout.templ, also
+// used by food-log items — see foodlog.templ), so an SSE patch of either
+// always lands in the same place.
 templ ActivityDetailFragment(d ActivityDetail) {
-	<div id="activity-detail">
+	<div id="detail-panel">
 		<h2>{ humanizeExerciseType(d.Type) }</h2>
-		<div class="activity-detail-meta">
+		<div class="detail-meta">
 			<div><span class="label">Start</span><span>{ d.StartTimeLabel }</span></div>
 			<div><span class="label">End</span><span>{ d.EndTimeLabel }</span></div>
 			<div><span class="label">Duration</span><span>{ FormatMinutes(d.DurationMinutes) }</span></div>
@@ -27,7 +28,7 @@ templ ActivityDetailFragment(d ActivityDetail) {
 }
 
 templ ActivityDetailError(message string) {
-	<div id="activity-detail">
+	<div id="detail-panel">
 		<p class="journal-error">{ message }</p>
 	</div>
 }

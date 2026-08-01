@@ -97,7 +97,7 @@ func JournalView(data DashboardData, j JournalData) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "</div><script>\r\n\t\t\t(function() {\r\n\t\t\t\twindow.addEventListener('beforeunload', function() {\r\n\t\t\t\t\tvar el = document.getElementById('journal-textarea');\r\n\t\t\t\t\tif (!el) return;\r\n\t\t\t\t\tvar blob = new Blob([el.value], { type: 'text/plain' });\r\n\t\t\t\t\tnavigator.sendBeacon({ journalBeaconURL(j.Day) }, blob);\r\n\t\t\t\t});\r\n\t\t\t})();\r\n\t\t</script></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "</div><script>\n\t\t\t(function() {\n\t\t\t\twindow.addEventListener('beforeunload', function() {\n\t\t\t\t\tvar el = document.getElementById('journal-textarea');\n\t\t\t\t\tif (!el) return;\n\t\t\t\t\tvar blob = new Blob([el.value], { type: 'text/plain' });\n\t\t\t\t\tnavigator.sendBeacon({ journalBeaconURL(j.Day) }, blob);\n\t\t\t\t});\n\t\t\t})();\n\t\t</script></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

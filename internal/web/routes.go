@@ -22,6 +22,7 @@ func (s *Server) registerRoutes() {
 	api.GET("/view", s.handleView)
 	api.GET("/tile", s.handleTile)
 	api.GET("/activity", s.handleActivity)
+	api.GET("/food-serving", s.handleFoodServing)
 	api.POST("/sync", s.handleForceSync)
 	api.POST("/journal", s.handleJournalSave)
 	api.POST("/journal/beacon", s.handleJournalBeacon)

@@ -1,14 +1,13 @@
 # Prerequisite knowledge for working on this repo
 
-Findings from a cold-start review of this project (2026-07-31), so a future
-agent/session doesn't have to re-derive them. Read `ARCHITECTURE.md` first —
-this doc is the practical addendum: environment gotchas, where the real dev
-data lives, and specific issues already found (some fixed, some deliberately
-left alone). If the task at hand is specifically about Cronometer, read
-`cronometer-integration.md` instead/first — it's a dedicated handoff doc
-with the reverse-engineered API research, current scaffolding state, and an
-ordered task list already done, so that work doesn't need to be re-derived
-either.
+Findings accumulated across working sessions on this project (started
+2026-07-31, most recently updated 2026-08-01), so a future agent/session
+doesn't have to re-derive them. Read `ARCHITECTURE.md` first — this doc is
+the practical addendum: environment gotchas, where the real dev data lives,
+and specific issues already found (some fixed, some deliberately left
+alone). If the task at hand is specifically about Cronometer, read
+`cronometer-integration.md` instead/first — it now describes the finished
+integration (client, auth, sync, UI, known gaps), not a handoff/TODO list.
 
 ## Environment gotchas on this machine
 
@@ -29,12 +28,33 @@ either.
   ABI as upstream `sqlite3.dll`/the amalgamation, since it's a
   SQLitePCLRaw-bundled build). Useful fallback if Go is ever unavailable
   again and you need to read a `.db`/working file directly.
-- **Never query `bin/explore-root/db/.health.db.work` (or its `-wal`/`-shm`)
-  in place.** It's a real (if seeded/test-flavored) dev root the user points
-  `--root` at locally; `internal/db.Store` assumes exclusive ownership of
-  that file. Copy it to a scratch directory first, always. Check
-  `Get-Process healthd` before touching it at all — if healthd is running,
-  leave it alone.
+- **Never seed, wipe, or `db init` `bin/explore-root` for testing — ever.**
+  It's the user's real, actually-configured `--root`, not a throwaway
+  fixture: real Google Health/Cronometer syncs land in it independently of
+  whatever session is running (confirmed the hard way — a repeated
+  wipe/seed/verify/wipe test cycle against it during one session
+  discovered a genuinely real, independently-timestamped nutrition sync
+  row mixed into the "clean" test data afterward, meaning real data had
+  likely been getting swept into `old-schema-backup-*` folders and
+  discarded across several earlier "clean" cycles without being caught
+  each time). For any live-verification need, create and use an isolated
+  scratch root instead — e.g. `healthd db init --root <scratchpad-path>`
+  with a throwaway `HEALTHD_DB_PASSPHRASE` — and never touch
+  `bin/explore-root` unless the task itself is explicitly about
+  `bin/explore-root` (the user directly asking to reinitialize or inspect
+  it is a deliberate action, not test churn). Separately, never query
+  `bin/explore-root/db/.health.db.work` (or its `-wal`/`-shm`) directly
+  even for a real, requested action — `internal/db.Store` assumes exclusive
+  ownership of that file, so check `Get-Process healthd` first and stop the
+  process (or copy the file aside) before touching it.
+- **`go build ./...` does NOT rebuild `bin/healthd.exe`.** It only
+  typechecks/compiles every package to verify correctness — it produces no
+  output file. If you edit code, run `templ generate` (if `.templ` files
+  changed) and then explicitly `go build -o bin/healthd.exe ./cmd/healthd`
+  (or `make build`) before restarting the server to test the change, every
+  time — running the old binary after "successfully" building looks
+  identical (no error) but silently serves stale behavior. Bit this exact
+  project more than once already.
 - `bin/` (and therefore `bin/explore-root/`) is gitignored — nothing under it
   is tracked, so it's safe to treat as disposable/local, but it's also the
   only place real-shaped data exists to test against. `bin/google-health-dump/`
@@ -72,7 +92,8 @@ rather than:
 See `internal/web/views/chart.go`'s `renderChartOverlay`/`hoverAttrs` for the
 working pattern (used for the chart hover crosshair/tooltip). Plain
 `data-show` alone (no `data-attr` on the same element) is fine and used
-correctly elsewhere (e.g. the activity-detail overlay in `layout.templ`).
+correctly elsewhere (e.g. the shared `#detail-overlay` in `layout.templ`,
+behind both the activities list and the food log).
 
 Also: **verify Datastar syntax against `data-star.dev/reference/attributes`
 before writing it**, not from memory/training-data recall — it's a young,
@@ -90,30 +111,32 @@ for a nested (non-root) `data-signals`, so don't assume they do.
   `waist_cm`/`neck_cm`/`hip_cm` have no upstream source at all (Google Health
   and Cronometer don't expose circumference), so those are plain
   user-entered columns with no raw/override split — write them directly.
-- **`internal/googlehealth` (the sync engine) was originally treated as
-  out-of-scope-unless-asked** — but a later session (2026-07-31, same day)
-  *did* deliberately reopen it after an explicit data-completeness audit and
-  user sign-off, wiring up floors/altitude/sedentary-period/
-  active-energy-burned/per-level-active-minutes/vo2max-samples/heart-rate
-  zone definitions+minutes/calories-by-zone/sleep respiratory
-  rate/sleep temperature/blood-glucose/core-body-temperature, plus a schema
-  migration mechanism (`internal/db/migrations.go` — this project's first;
-  `Store.migrate()` applies pending entries via `PRAGMA user_version` on
-  every `Open`). Point: "out of scope" here meant "don't touch incidentally
-  while fixing something else," not "never" — confirm with the user before
-  reopening it for real, same as happened here, rather than assuming the
-  earlier note still blocks it.
-- **Nutrition/food data is deliberately never pulled from Google Health** —
-  Cronometer is meant to own that domain — but **Cronometer sync doesn't
-  exist in this codebase at all**: no `internal/cronometer` package, no
-  `gocronometer` dependency in `go.mod`, just schema tables
-  (`cronometer_*`) and a `// TODO: run the Cronometer sync pass too` stub in
-  `internal/cli/sync.go`. `cronometer_daily_nutrition.kcal_burned_cronometer`
-  exists in the schema (added 2026-07-31, to disambiguate from
-  `watch_daily_summary.kcal_burned_google`) but will sit NULL forever until
-  that sync client is actually built — a separate, much larger task than
-  anything wired up so far (new external API integration, credential
-  handling), not attempted.
+- **`internal/googlehealth`'s `watch_*` schema/structs/sync were rewritten
+  wholesale** (not incrementally patched) around the "five fixed
+  representation shapes" taxonomy — see `ARCHITECTURE.md`. This happened
+  after a real bug (calories-by-heart-rate-zone sync failing) triggered a
+  full audit of which Google Health data types support `list()` vs
+  `rollup()`/`dailyRollUp()`, and a deliberate design pass on which
+  representation (raw timeline, hourly, daily scalar, category breakdown,
+  segment) is actually *useful* per metric rather than just technically
+  fetchable. `internal/db/migrations.go`'s mechanism exists but is
+  currently **empty** (see that file's own comment) — this rewrite went
+  straight into `schema.sql` rather than a migration, since there was no
+  real deployed data to preserve at the time. Point for future
+  schema-touching work: confirm with the user whether the *next* change
+  needs a real migration (once there's real data on disk worth preserving)
+  rather than assuming another wholesale rewrite is fine.
+- **Cronometer sync fully exists now** (`internal/cronometer`, see
+  `cronometer-integration.md`) — nutrition/food data is still deliberately
+  never pulled from Google Health, and Cronometer is the sole writer of
+  every `cronometer_*` table. Built against Cronometer's mobile REST API
+  (`mobile.cronometer.com/api/v2/*`), **not** the `gocronometer`/GWT-RPC
+  library `ARCHITECTURE.md` originally named as the plan — that plan
+  changed once real captured data confirmed the mobile API's shapes work
+  and are cleaner to work with directly. `cronometer_daily_nutrition.kcal_burned_cronometer`
+  is populated (Cronometer's own BMR+activity+food-thermic-effect
+  expenditure estimate) and surfaced on the dashboard as an "Expenditure"
+  tile alongside "Energy" (consumption) and a computed "Deficit" tile.
 - **Google Health has no location/GPS/route data type** — checked directly
   against the RPC reference
   (`developers.google.com/health/reference/rpc/google.devicesandservices.health.v4`),
@@ -132,71 +155,91 @@ for a nested (non-root) `data-signals`, so don't assume they do.
   labeled state — don't conflate that with "the watch recorded nothing."
 - Every DB read/write in `internal/web` goes through plain `database/sql`
   against `*sql.DB` (no ORM); the pattern for a new feature needing DB access
-  is a small package-level file like `journal.go` (fetch + save functions)
-  plus a struct in `views/models.go`, not a new abstraction layer.
+  is a small package-level file like `journal.go`/`bodymeasurement.go`/
+  `foodlog.go` (fetch + save functions) plus a struct in `views/models.go`,
+  not a new abstraction layer.
 - `.templ` files are compiled to `_templ.go` by `templ generate` (Makefile's
   `generate` target) — never hand-edit a `*_templ.go` file, it says so at
-  the top and will be silently overwritten.
+  the top and will be silently overwritten. And remember `templ generate`
+  alone doesn't rebuild the binary either — see the `go build ./...` gotcha
+  above.
 
-## Specific findings from this session (2026-07-31 review)
+## What's built as of 2026-08-01
 
-Verified live against `bin/explore-root`'s dev DB:
+The activities list (calories/heart rate), the heart-rate/sleep/steps
+expanded detail views (intraday line, stage timeline, hourly bar), body
+measurements (form + carry-forward), and the old "growing water glass"
+step-goal tile (replaced by a progress ring next to the steps tile's big
+value) are all done — see `structure.md`/`ARCHITECTURE.md` for what exists
+now rather than re-deriving it from an old gap list. Cronometer is fully
+integrated (`cronometer-integration.md`). The dashboard itself has had a UI
+pass since: a native date picker on the day label, charts capped to a
+sane on-screen size and given a consistent 24h/thin-line treatment, empty
+tiles (genuinely no data for the day) omitted from the page instead of
+showing a placeholder (`shouldHideEmptyTile` in `handlers.go` — Body
+Measurements is exempt, it's an input form not a stat), a handful of tiles
+(Steps/Heart rate/Body/Sleep) defaulting to expanded on load
+(`defaultExpandedKind`), and the Nutrition section laid out as two explicit
+rows (kcal metrics, then macros) rather than left to the general grid's
+auto-fill.
 
-- The activities/workout list only ever rendered exercise type + start time +
-  duration (`views/dashboard.templ`'s `activitiesTileBody`), never calories
-  or heart rate — even though the query behind it
-  (`buildActivitiesTile` in `internal/web/data.go`) already selects
-  `calories_burned` and `avg_heart_rate_bpm` into `ActivitySummary`. Confirmed
-  on the two real 2026-07-30 BIKING sessions (70 kcal/106 bpm and 113 kcal/104
-  bpm, both correctly stored) — a template gap, not a data gap.
-- Expanding *any* stat tile (`buildStatTile`/`buildChart` in `data.go`) always
-  built a 7-day bar chart of one value per day — including Heart Rate, where
-  a user tapping to expand reasonably expects the *selected day's* intraday
-  trace, not a week of daily averages. The DB already had ~5,900
-  `watch_heart_rate_intraday` samples for a single day; nothing in
-  `internal/web` queried that table except the activity-detail overlay.
-  Likewise `watch_steps_hourly` (hourly steps) and `watch_sleep_stage`
-  (full sleep-stage timeline, confirmed present and populated from the
-  Google Health `sleep.list.json` shape) were stored but never rendered
-  anywhere.
-- `body_measurement` (weight/waist/neck/hip) has zero rows in the live dev
-  DB and there was no route, handler, or template anywhere that reads or
-  writes it — despite the schema being fully built out for exactly this
-  (see its comment in `schema.sql`). This was a pure gap: nothing to fix,
-  a feature to add.
-- The literal "growing water glass" step-goal visual is
-  `views.goalGlassSVG` + `views.buildGoalTile` (`TileKindGoal`), driven by a
-  separate "Daily Goal" tile in `DefaultTileKinds`
-  (`internal/web/handlers.go`).
-- **Still-open, deliberately-not-fixed gap** (as of 2026-07-31, after the
-  data-completeness pass below): `watch_steps_hourly.distance_m` and
-  `.calories` columns exist in `schema.sql` but `syncStepsHourly`
-  (`internal/googlehealth/sync_upsert.go`) only ever populates `steps` —
-  confirmed both columns are NULL for every row in the live DB. Any hourly
+## Still-open, deliberately-not-fixed gaps
+
+- `watch_steps_hourly.distance_m`/`.calories` columns exist in `schema.sql`
+  and the upsert SQL (`upsertHourlySteps` in
+  `internal/googlehealth/sync_upsert.go`) writes them, but the fetch side
+  (`internal/googlehealth/sync_details.go`, the hourly-steps sync function)
+  only ever populates `healthdata.HourlySteps.Steps` — `DistanceM`/`Calories`
+  are never set, so those two columns stay NULL for every row. Any hourly
   distance/calories view is not currently buildable from real data; only
-  hourly *steps* has actual data behind it. (Floors used to be listed here
-  too as a "no confirmed fetch" gap — that's now fixed, see below; this
-  specific hourly-distance/calories one is still open.)
-- `floors_climbed` **is now synced** (as of 2026-07-31) via `floors`'
-  `dailyRollUp` — its `list()` path is rejected outright by the API
-  (`NoList: true` in `datatypes.go`), and this account's own rollup response
-  has always come back empty, so `FloorsRollup`'s field shape
-  (`internal/googlehealth/values.go`) is an unconfirmed best-effort guess —
-  safe if wrong (`ExtractRollupValues` just finds no points, doesn't
-  silently decode the wrong field), but verify against a real non-empty
-  response if you ever get one.
+  hourly *steps* has actual data behind it.
+- `FloorsRollup`'s field shape (`internal/googlehealth/values.go`) is still
+  an unconfirmed best-effort guess by symmetry with `TotalCaloriesRollup` —
+  this account's own floors rollup response has always come back empty, so
+  there's never been a real non-empty response to verify the shape against.
+  Safe if wrong (`ExtractRollupValues` just finds no points rather than
+  silently decoding the wrong field), but verify against a real response if
+  you ever get one.
+- Three Cronometer fields are structurally present but never populated,
+  confirmed against real account data, not guessed: `cronometer_serving.category`
+  (Cronometer's `food.Category` is a numeric ID with no confirmed name
+  catalog captured yet — left NULL rather than storing a meaningless
+  number), `cronometer_serving.meal_group` (never observed as a usable
+  field on a diary entry via this API), and the entire `cronometer_note`
+  table (no `"Note"` diary entry type was observed in the real dump this
+  was built against — whether Cronometer's notes feature is reachable via
+  this API at all is unconfirmed, not just unpopulated by omission).
+- **`healthd serve` and the bare `healthd` scheduler are still two separate
+  processes** — see `ARCHITECTURE.md` §2. There's no single "just run
+  everything" command yet; running only `serve` means auto-sync never
+  happens, only the dashboard's manual Sync button does.
 
 ## How to run/test locally
 
 ```bash
-make generate   # templ generate
-make build      # go build -o bin/healthd ./cmd/healthd
-make run        # go run ./cmd/healthd (foreground, needs --root or ~/.healthd)
+make generate        # templ generate
+make build           # go build -o bin/healthd ./cmd/healthd
+make run             # go run ./cmd/healthd (foreground scheduler, needs --root or ~/.healthd)
+make test / make vet # go test ./... / go vet ./...
 ```
 
-To test against realistic data without touching the user's live dev root:
-copy `bin/explore-root/` to a scratch directory, then run against the copy
-(`healthd --root <copy-path>` or `healthd serve` under that root) — never
-run directly against `bin/explore-root/db/.health.db.work` while it might
-also be in use elsewhere. Default port is `8080`
-(`bin/explore-root/config/config.yaml`).
+`go build ./...` (no `-o`) is NOT a substitute for `make build` — see the
+environment gotcha above, it typechecks but produces no binary. To actually
+exercise a change: `templ generate` → `go build -o bin/healthd.exe
+./cmd/healthd` → restart whatever's running that binary.
+
+For live UI verification, create an isolated scratch root — never
+`bin/explore-root`, see the environment gotcha above:
+
+```bash
+HEALTHD_DB_PASSPHRASE=throwaway ./bin/healthd.exe --root <scratch-path> db init
+./bin/healthd.exe --root <scratch-path> serve
+```
+
+`healthd serve` (see `ARCHITECTURE.md` §2) only runs the web dashboard, not
+the sync scheduler — the dashboard's Sync button, `healthd sync`, or a
+small one-off Go program using `internal/db.Open` directly (see any of this
+project's `cmd/`-style throwaway scripts) are the ways to get real-shaped
+data into a scratch root without needing real Google/Cronometer
+credentials. Default port is `8080` (`config.yaml`'s `port` key, under
+whatever root you point `--root` at).

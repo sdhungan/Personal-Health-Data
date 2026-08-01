@@ -28,20 +28,27 @@ func tilesForCategory(tiles []TileData, category string) []TileData {
 	return out
 }
 
+// Dashboard renders every section that has something to show.
+// data.Tiles already excludes tiles with no data for the day (see
+// shouldHideEmptyTile in handlers.go) — a section with zero tiles left is
+// skipped entirely, except "nutrition", which always renders since its
+// Cronometer account card (connect prompt or status) needs to stay
+// reachable even with no metrics synced yet.
 templ Dashboard(data DashboardData) {
 	<div class="dashboard" id="dashboard-grid">
 		for _, section := range tileSections {
 			{{ tiles := tilesForCategory(data.Tiles, section.Key) }}
-			if len(tiles) > 0 {
+			if len(tiles) > 0 || section.Key == "nutrition" {
 				<section class="dashboard-section">
 					<h2 class="section-title">{ section.Title }</h2>
-					<div class="dashboard-grid">
-						for _, t := range tiles {
-							@Tile(t, data.Day)
-						}
-					</div>
 					if section.Key == "nutrition" {
-						@CronometerAccountCard(data.CronometerConnected, data.CronometerMessage)
+						@NutritionSection(tiles, data.Day, data.CronometerConnected, data.CronometerMessage)
+					} else {
+						<div class="dashboard-grid">
+							for _, t := range tiles {
+								@Tile(t, data.Day)
+							}
+						</div>
 					}
 				</section>
 			}
@@ -49,8 +56,51 @@ templ Dashboard(data DashboardData) {
 	</div>
 }
 
+// NutritionSection lays the Nutrition category out as two explicit rows —
+// kcal metrics (Energy/Expenditure/Deficit), then the 3 macros — followed
+// by the detailed food log and the Cronometer account card, rather than
+// leaving all 6 stat tiles to whatever the general dashboard-grid's
+// auto-fill happens to wrap into at the current viewport width.
+templ NutritionSection(tiles []TileData, day string, cronometerConnected bool, cronometerMessage string) {
+	{{ kcalTiles, macroTiles, foodLogTile := splitNutritionTiles(tiles) }}
+	<div class="nutrition-row">
+		for _, t := range kcalTiles {
+			@Tile(t, day)
+		}
+	</div>
+	<div class="nutrition-row">
+		for _, t := range macroTiles {
+			@Tile(t, day)
+		}
+	</div>
+	if foodLogTile != nil {
+		@Tile(*foodLogTile, day)
+	}
+	@CronometerAccountCard(cronometerConnected, cronometerMessage)
+}
+
+// splitNutritionTiles buckets the Nutrition category's tiles by their known
+// kind strings (see DefaultTileKinds) rather than by position, so the
+// grouping stays correct regardless of what order buildDashboardData built
+// them in.
+func splitNutritionTiles(tiles []TileData) (kcal, macro []TileData, foodLog *TileData) {
+	for _, t := range tiles {
+		switch t.Metric {
+		case "nutrition_energy", "nutrition_expenditure", "nutrition_deficit":
+			kcal = append(kcal, t)
+		case "nutrition_protein", "nutrition_carbs", "nutrition_fat":
+			macro = append(macro, t)
+		case "food_log":
+			ft := t
+			foodLog = &ft
+		}
+	}
+	return kcal, macro, foodLog
+}
+
 templ Tile(t TileData, day string) {
-	<div id={ t.ID } data-category={ t.Category } class={ "tile", templ.KV("tile-expanded", t.Expanded), tileSizeClass(t) }>
+	{{ fullWidthExpanded := t.Expanded && t.Kind != TileKindStat && t.Kind != TileKindSleep }}
+	<div id={ t.ID } data-category={ t.Category } class={ "tile", templ.KV("tile-expanded", fullWidthExpanded), tileSizeClass(t) }>
 		<div class="tile-header">
 			<div class="tile-header-left">
 				<span class="tile-icon-badge">
@@ -154,7 +204,7 @@ templ detailTileBody(t TileData) {
 				if t.Detail.RangeLabel != "" {
 					<div class="tile-stat-sub">{ t.Detail.RangeLabel }</div>
 				}
-				@templ.Raw(renderStageTimelineSVG(t.Detail.Stages))
+				@templ.Raw(renderStageTimelineSVG(t.Detail.Stages, chartInstanceID(t.ID)))
 				@stageLegend(t.Detail.Stages)
 			}
 	}
@@ -187,11 +237,22 @@ func distinctStageTypes(stages []StageSegment) []string {
 	return out
 }
 
+// humanizeStageType handles both single-word stage types (sleep: AWAKE,
+// LIGHT, DEEP, REM) and multi-word ones (activity level: LIGHTLY_ACTIVE,
+// MODERATELY_ACTIVE, VERY_ACTIVE), splitting on "_" so the legend reads
+// "Lightly Active" rather than "Lightly_active".
 func humanizeStageType(s string) string {
 	if s == "" {
 		return s
 	}
-	return strings.ToUpper(s[:1]) + strings.ToLower(s[1:])
+	words := strings.Split(strings.ToLower(s), "_")
+	for i, w := range words {
+		if w == "" {
+			continue
+		}
+		words[i] = strings.ToUpper(w[:1]) + w[1:]
+	}
+	return strings.Join(words, " ")
 }
 
 templ foodLogTileBody(t TileData) {
@@ -201,7 +262,7 @@ templ foodLogTileBody(t TileData) {
 		<ul class="activity-list">
 			for _, s := range t.FoodLog {
 				<li>
-					<div class="activity-item">
+					<button class="activity-item" data-on:click={ getExpr(foodServingURL(s.ID)) + "; $detailOpen = true" }>
 						<span class="activity-main">
 							<span class="activity-type">{ s.FoodName }</span>
 							<span class="activity-meta">
@@ -217,7 +278,7 @@ templ foodLogTileBody(t TileData) {
 								<span class="activity-stat">{ fmt.Sprintf("%.0fg protein", *s.ProteinG) }</span>
 							}
 						</span>
-					</div>
+					</button>
 				</li>
 			}
 		</ul>
@@ -231,7 +292,7 @@ templ activitiesTileBody(t TileData) {
 		<ul class="activity-list">
 			for _, a := range t.Activities {
 				<li>
-					<button class="activity-item" data-on:click={ getExpr(activityURL(a.ID)) + "; $activityOpen = true" }>
+					<button class="activity-item" data-on:click={ getExpr(activityURL(a.ID)) + "; $detailOpen = true" }>
 						<span class="activity-main">
 							<span class="activity-type">{ humanizeExerciseType(a.Type) }</span>
 							<span class="activity-meta">{ a.StartLabel } &middot; { FormatMinutes(a.DurationMinutes) }</span>

@@ -13,34 +13,56 @@ Built with Cobra, the binary exposes itself as one executable with subcommands i
 ```
 healthd [subcommand] [flags]
 
-healthd                    # foreground mode — runs the server, logs straight
-                            # to stdout/stderr. This is your "just let me see
-                            # what's happening" mode during development or
-                            # debugging, no log file to tail.
+healthd                    # foreground mode — runs the sync scheduler only
+                            # (every sync_interval_minutes, plus once
+                            # immediately on start), logging straight to
+                            # stdout/stderr. Does NOT serve the dashboard —
+                            # see the gap noted below.
 
-healthd --action=install   # registers the binary as an OS service
+healthd --action=install   # registers the scheduler as an OS service
                             # (systemd unit on Linux, Windows Service via
-                            # kardianos/service) so it survives reboots
-healthd --action=start
-healthd --action=stop
-healthd --action=uninstall
+                            # kardianos/service) so it survives reboots.
+healthd --action=start     # STUB as of this writing — every action just
+healthd --action=stop      # prints a "TODO" line (internal/cli/service.go);
+healthd --action=uninstall # the shape is wired up, the OS integration isn't.
 
-healthd sync                # runs one ingestion pass immediately (manual
-                             # trigger, useful for testing or "run it now")
+healthd serve                     # runs the web dashboard (Echo + Datastar).
+                                   # Does NOT run the sync scheduler — the
+                                   # dashboard's own Sync button is a manual
+                                   # per-day trigger instead.
+healthd serve --action=install    # same install/start/stop/uninstall stub
+healthd serve --action=start      # pattern as above, but registers the web
+healthd serve --action=stop       # dashboard as its OWN separate OS service
+healthd serve --action=uninstall  # (so it can restart independently of the
+                                   # scheduler service).
 
-healthd auth google         # runs the OAuth2 device/local-redirect flow
-                             # for Google Health API access
+healthd sync                 # runs one ingestion pass immediately, both
+                              # sources (Google Health, then Cronometer) —
+                              # manual trigger, useful for testing or
+                              # "run it now" without waiting on `serve`'s
+                              # click-driven sync or the scheduler's interval.
+
+healthd auth google          # runs the OAuth2 local-redirect flow for
+                              # Google Health API access.
+
+healthd auth cronometer      # prompts for Cronometer email/password
+                              # (hidden input), verifies them with a real
+                              # login, then saves them encrypted at rest —
+                              # see §5. The web dashboard's own login card
+                              # does the same thing without a terminal.
 
 healthd db decrypt <out.sql>  # dumps the encrypted DB to a plaintext .sql
                                # file — see §6, this is explicit and logged
 
-healthd db init              # first-run: creates the DB, prompts for the
-                              # encryption passphrase, writes folder structure
+healthd db init               # first-run: creates the DB, prompts for the
+                               # encryption passphrase, writes folder structure
 ```
 
-Why `--action` and not five distinct subcommands only? Both are actually present here on purpose: `install/start/stop/uninstall` are lifecycle actions on the service registration, so they're naturally flags on a `service` concept rather than top-level verbs — while `sync`, `auth`, and `db decrypt` are one-shot operations you run and watch finish, so they're plain subcommands. Splitting them this way keeps `healthd --help` from being a wall of near-duplicate service-management verbs mixed in with one-shot tools.
+Why `--action` and not five distinct subcommands only? `install/start/stop/uninstall` are lifecycle actions on a service *registration*, so they're naturally flags on a `service` concept rather than top-level verbs — while `sync`, `auth`, and `db decrypt` are one-shot operations you run and watch finish, so they're plain subcommands. Splitting them this way keeps `healthd --help` from being a wall of near-duplicate service-management verbs mixed in with one-shot tools.
 
 Why foreground-by-default instead of always logging to a file? Because the moment something's actually wrong, you want to watch it happen, not `tail -f` a log path you have to remember. The installed-service mode still writes to the structured log directory (§4) — foreground mode is purely for the "I'm sitting here debugging" case.
+
+**Known gap**: the bare `healthd` scheduler and `healthd serve`'s dashboard are still two separate processes — there's no single command that runs both together yet (`runForeground` in `internal/cli/service.go` has a literal `TODO: start the Echo+Datastar server alongside this scheduler`). Today, "always-on with auto-sync" means running both `healthd` and `healthd serve` at once; `serve` alone only syncs when the dashboard's Sync button is clicked.
 
 ## 3. Data flow and the sync scheduler
 
@@ -48,23 +70,39 @@ Rather than relying on the OS's own cron table (editing crontab / Task Scheduler
 
 ```
    Google Health API ──┐
-                        ├──► sync job (internal cron, e.g. every 30 min)
-   Cronometer (unofficial) ──┘         │
+                        ├──► sync job (internal cron, e.g. every 30 min,
+   Cronometer (mobile API) ──┘      or "healthd sync" / the dashboard's
+                                    Sync button on demand)
+                                        │
                                         ▼
-                              writes raw_value rows
+                              writes watch_*/cronometer_* tables
                                         │
                                         ▼
                               ┌─────────────────┐
                               │   Encrypted DB   │◄──── UI edits write
-                              │  (source of truth)│      override_value
+                              │  (source of truth)│      _override columns
                               └─────────────────┘
                                    │         ▲
-                     Claude job reads   UI (Echo+Datastar)
-                     writes daily_notes  reads + writes via
-                     (separate table)    REST, admin-gated
+                          UI (Echo+Datastar) reads + writes via
+                          REST — dashboard tiles, journal, body
+                          measurements, food log
 ```
 
-The `raw_value` / `override_value` split from earlier still stands — the sync job is the only writer of `raw_value`, the UI's admin-mode edit endpoints are the only writer of `override_value`, and reads everywhere else resolve `COALESCE(override_value, raw_value)`. That rule is enforced in the DB access layer (one Go package both the sync job and the API handlers import), not re-implemented in each caller.
+The `_raw` / `_override` column split applies to `watch_*` tables specifically (see `internal/db/schema.sql` — e.g. `body_measurement.weight_kg_raw`/`weight_kg_override`): the sync job is the only writer of a `_raw` column, the UI's edit endpoints (body measurements, journal) are the only writer of an `_override` column, and reads resolve `COALESCE(_override, _raw)`. Cronometer's own tables (`cronometer_*`) have no such split — Cronometer sync is the sole writer of those columns outright (`INSERT ... ON CONFLICT DO UPDATE`), since there's no UI path that edits nutrition data directly; the source of truth for what you ate lives in Cronometer itself, not in this app.
+
+### Data model: five fixed representation shapes
+
+Every `watch_*` table (the Google Health side of the schema) follows one of five fixed shapes, chosen per metric by how its values are actually *useful to look at* — not just by what the API can technically return. See `internal/db/schema.sql`'s own header comment on this section for the authoritative, up-to-date version of this list:
+
+1. **DailyScalar** — one column in `watch_daily_summary`, one row per day (steps, calories, resting HR, ...). `raw_payload` on that table keeps the full JSON response for the day so a first-pass column set can't silently lose data — future columns can be backfilled from it without re-hitting the API.
+2. **DailyByCategory** — day + enum-category breakdown (`watch_active_minutes_by_level`, `watch_heart_rate_zone_minutes`, ...) — e.g. minutes per heart-rate zone, not just a daily total.
+3. **Hourly** — day + hour buckets (`watch_steps_hourly`) — coarser than raw samples, finer than a daily total.
+4. **Timeline** — exact-timestamp samples (`watch_heart_rate_intraday`, `watch_blood_glucose_sample`, ...) — kept granular because *when* it happened matters (heart rate during exercise, glucose after a meal). The sync job always computes that day's avg/min/max from the same fetch straight into `watch_daily_summary`, rather than issuing a separate simplified query later.
+5. **SegmentTimeline** — start/end spans through the day (`watch_sleep_stage`, `watch_activity_level_segment`) — for metrics whose *shape across the day* is the point, not a total.
+
+Session types (sleep, exercise, ECG) don't fit any of the five — their internal structure is genuinely bespoke, kept as their own tables rather than forced into a shape that doesn't fit.
+
+**`internal/healthdata`** is the plain Go struct package mirroring these tables (`DailySummary`, `HourlySteps`, `HeartRateSample`, `ActivityLevelSegment`, etc.) — deliberately dependency-free (verified via `go list -deps`, only itself among internal packages), so both `internal/googlehealth` (the writer) and `internal/web` (the reader) can import it directly without an import cycle between them.
 
 ## 4. Root folder layout
 
@@ -97,15 +135,16 @@ Google's Health API uses standard OAuth2 (authorization code flow). Since this i
 3. Tokens are written to `config/google_oauth.json.enc`, encrypted with the same key as the DB (§6) — the refresh token is the sensitive long-lived credential here, so it gets the same protection as the health data itself.
 4. The sync job refreshes the access token silently on each run; if the refresh token itself is ever revoked, the sync job logs a clear "re-run `healthd auth google`" error rather than failing silently.
 
-Cronometer has no OAuth — it's username/password against the unofficial mobile API. Of the reverse-engineered options, a Go-native client library (`gocronometer`, MIT/GPLv2-licensed, wraps the same export endpoints the SPA uses) is the natural fit here since everything else in the sync job is already Go — no need to shell out to a Python tool. The credentials for it get the same encrypted-at-rest treatment as the Google tokens; the session cookie it caches internally goes in `config/` alongside them, not written unencrypted anywhere.
+Cronometer has no OAuth — it's username/password against `mobile.cronometer.com/api/v2/*`, Cronometer's own mobile app's REST API (reverse-engineered; there's also an older GWT-RPC web API a third-party Go library wraps, but the mobile API was chosen instead — cleaner JSON payloads, and it's what `internal/cronometer/client.go` is written against directly rather than through a wrapped dependency). `internal/cronometer/session.go` logs in, caches the resulting session token, and re-logs-in only when that session expires (Cronometer throttles repeated logins per account). Both the credentials and the cached session get the same encrypted-at-rest treatment as the Google OAuth tokens, but as two separate files rather than one: `config/cronometer_credentials.json.enc` (long-term) and `config/cronometer_session.json.enc` (short-lived, safe to lose — just triggers a fresh login next sync).
 
 ## 6. Encryption at rest, and the decrypt subcommand
 
-The DB engine here — SQLite, encrypted at rest — needs the encryption to live at the storage layer, which is what SQLCipher-compatible drivers give you: the `.db` file on disk is genuinely opaque without the key, and the binary is the only thing that knows how to open it.
+The actual implementation is whole-**file** encryption, not an encrypting storage engine: `internal/db.Store` decrypts `db/health.db.enc` into a plaintext SQLite working file (`db/.health.db.work`) on `Open`, hands out a normal `*sql.DB` (via `modernc.org/sqlite`, a pure-Go driver — no cgo/SQLCipher build needed) for the life of the process, and re-encrypts the working file back over `health.db.enc` on `Checkpoint`/`Close` (AES-256-GCM, via `internal/crypto`). The plaintext working file only exists on disk for the duration of one run — never checked into anything, never left behind on a clean shutdown.
 
-* On first run (`healthd db init`), you're prompted for a passphrase; a key is derived from it (e.g. via Argon2) and the derived key material is what's stored in `keys/db.key` (0600 permissions) — the passphrase itself is never written to disk.
-* Every other subcommand that touches the DB reads that key file to open the encrypted database transparently — you don't re-enter a passphrase on every sync run, since this is unattended.
-* `healthd db decrypt <path>.sql` is the deliberate escape hatch: it opens the encrypted DB with the stored key and dumps a plaintext `.sql` file to the path you specify — for backups you want to inspect, migrations, or moving to a different tool later. Because this is the one command that deliberately produces unencrypted data on disk, it should log a loud warning to stderr and require a `--confirm` flag, rather than running silently.
+* On first run (`healthd db init`), you're prompted for a passphrase (or set `HEALTHD_DB_PASSPHRASE` for unattended/scripted init); a key is derived from it via Argon2id (`internal/crypto`'s `kdf.go`) and the *derived key* — not the passphrase — is what's stored in `keys/db.key` (0600 permissions).
+* Every other subcommand that touches the DB reads that key file directly to open the encrypted database transparently — you don't re-enter a passphrase on every sync run, since this is unattended.
+* **Unclean-shutdown recovery**: if `.health.db.work` is still present when `Open` runs (process killed, machine lost power, etc.), `Store` recovers from that working file instead of the last encrypted checkpoint, so a forced kill mid-session doesn't lose whatever was written since the last checkpoint — it just means that write never got re-encrypted onto disk as a checkpoint, not that it's gone.
+* `healthd db decrypt <path>.sql` is the deliberate escape hatch: it opens the encrypted DB with the stored key (via a throwaway working file, so it can never collide with a running server/sync process) and dumps a plaintext `.sql` file to the path you specify — for backups you want to inspect, migrations, or moving to a different tool later. Because this is the one command that deliberately produces unencrypted data on disk, it logs a loud warning to stderr and refuses to run without an explicit `--confirm` flag.
 
 ## 7. UI: Echo + templ + Datastar
 
@@ -113,6 +152,8 @@ The DB engine here — SQLite, encrypted at rest — needs the encryption to liv
 * Echo handles routing and the HTTP layer — request parsing, middleware (auth-gating the admin-mode edit routes), and serving the templ-rendered HTML.
 * Datastar, using the Go SDK's `ServerSentEventGenerator`, is what makes the UI feel dynamic without a JS framework: an edit in the UI triggers a request to an Echo handler, which re-renders the affected templ fragment and pushes it back over SSE with `morph` merge mode (Datastar's default, backed by Idiomorph) — the DOM patches in place, no full page reload, no client-side state to keep in sync by hand. This is the same "backend renders HTML, browser just displays it" model as the rest of the system: the Go binary stays the single source of truth for both data and UI state.
 * Admin mode: the UI can show/hide edit controls based on a client-side toggle for convenience, but the actual enforcement of which fields are editable happens in the Echo handler (checking a per-field metadata table against the request), same as discussed earlier — the client-side toggle is UX, not security.
+* Charts (`internal/web/views/chart.go`) are server-rendered inline SVG, no client-side charting library — bar charts (7-day trends, hourly steps), line charts (heart-rate intraday), and segment timelines (sleep stages, activity level) all share one hover-tooltip mechanism (`hoverAttrs`/`renderChartOverlay`) driven entirely by Datastar signals, no JS beyond what Datastar itself provides.
+* One shared click-to-detail overlay (`#detail-overlay`/`$detailOpen` in `layout.templ`) backs both the activities list and the food log — clicking an item fetches that item's detail fragment over SSE into the same `#detail-panel`, so adding a third "clickable list → popup detail" tile later reuses the same overlay rather than building a new one. See `prerequisite.md`'s Datastar gotcha section before changing anything here — this version of Datastar has a real footgun around combining `data-show` and `data-attr:style` on the same element.
 
 ## 8. Build system
 
