@@ -14,7 +14,7 @@ templ Page(data DashboardData) {
 			<script type="module" src="/static/datastar.js"></script>
 		</head>
 		<body>
-			@Header()
+			@Header(data.Username)
 			<main class="main">
 				@DataViewBody(data)
 			</main>
@@ -29,13 +29,43 @@ templ Page(data DashboardData) {
 	</html>
 }
 
-templ Header() {
+templ Header(username string) {
 	<header class="site-header">
 		<div class="brand">
 			<span class="brand-title">Personal Health Dashboard</span>
 		</div>
 		<nav class="site-nav">
 			<a href="/">Dashboard</a>
+			if username != "" {
+				<div class="user-menu">
+					<button
+						type="button"
+						class="user-menu-trigger"
+						title={ username }
+						data-on:click="$userMenuOpen = !$userMenuOpen"
+					>
+						@iconUser()
+					</button>
+					<div class="user-menu-backdrop" data-show="$userMenuOpen" data-on:click="$userMenuOpen = false" style="display:none"></div>
+					<div class="user-menu-dropdown" data-show="$userMenuOpen" style="display:none">
+						<div class="user-menu-name">{ username }</div>
+						<a class="user-menu-item" href="/settings/account" data-on:click="$userMenuOpen = false">
+							@iconUser()
+							Account
+						</a>
+						<a class="user-menu-item" href="/settings/google-client" data-on:click="$userMenuOpen = false">
+							@iconSettingsGear()
+							Google settings
+						</a>
+						<form method="post" action="/logout">
+							<button type="submit" class="user-menu-item user-menu-item-btn">
+								@iconLogout()
+								Log out
+							</button>
+						</form>
+					</div>
+				</div>
+			}
 		</nav>
 	</header>
 }

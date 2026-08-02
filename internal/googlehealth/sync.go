@@ -25,9 +25,13 @@ const dateLayout = "2006-01-02"
 //   - swim-lengths-data (see datatypes.go) is listed for DumpToday to
 //     capture but not synced — its field shape has never been confirmed
 //     against a real response.
+// DBSyncer syncs one user's Google Health data. UserID scopes every write
+// this syncer makes — one DBSyncer is constructed per user per sync pass
+// (see internal/cli's scheduler fan-out), never shared across users.
 type DBSyncer struct {
 	Client *Client
 	DB     *sql.DB
+	UserID int64
 }
 
 // SyncDay fetches and upserts every data type healthd currently maps for

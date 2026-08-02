@@ -79,6 +79,9 @@ func newTestDB(t *testing.T) *sql.DB {
 	if _, err := db.Exec(dbpkg.Schema); err != nil {
 		t.Fatalf("applying schema: %v", err)
 	}
+	if _, err := db.Exec(`INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'x')`); err != nil {
+		t.Fatalf("seeding test user: %v", err)
+	}
 	return db
 }
 
@@ -95,6 +98,7 @@ func TestSyncDayHappyPath(t *testing.T) {
 	s := &DBSyncer{
 		Client:      &Client{HTTP: &http.Client{Transport: transport}},
 		DB:          db,
+		UserID:      1,
 		SessionPath: filepath.Join(t.TempDir(), "session.json.enc"),
 		credentials: &Credentials{Username: "u", Password: "p"},
 	}
@@ -222,6 +226,7 @@ func TestSyncDayRetriesOnceAfterSessionExpiry(t *testing.T) {
 	s := &DBSyncer{
 		Client:      &Client{HTTP: &http.Client{Transport: transport}},
 		DB:          db,
+		UserID:      1,
 		SessionPath: filepath.Join(t.TempDir(), "session.json.enc"),
 		credentials: &Credentials{Username: "u", Password: "p"},
 		session:     &Session{UserID: 1, Token: "stale", Timezone: "UTC"}, // pre-seeded, stale

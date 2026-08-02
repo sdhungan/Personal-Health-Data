@@ -53,7 +53,7 @@ func CronometerAccountCard(connected bool, message string) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "<div class=\"body-form\"><div class=\"body-field\"><label for=\"crono-email\">Email</label> <input id=\"crono-email\" type=\"email\" autocomplete=\"username\" data-bind:cronousername></div><div class=\"body-field\"><label for=\"crono-password\">Password</label> <input id=\"crono-password\" type=\"password\" autocomplete=\"current-password\" data-bind:cronopassword></div><div class=\"body-form-footer\"><button class=\"body-carry-btn\" data-on:click=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "<div class=\"body-form\"><div class=\"body-field\"><label for=\"crono-email\">Email</label> <input id=\"crono-email\" type=\"email\" autocomplete=\"off\" data-bind:cronousername></div><div class=\"body-field\"><label for=\"crono-password\">Password</label> <input id=\"crono-password\" type=\"password\" autocomplete=\"off\" data-bind:cronopassword></div><div class=\"body-form-footer\"><button class=\"body-carry-btn\" data-on:click=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

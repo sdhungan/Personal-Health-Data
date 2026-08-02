@@ -57,6 +57,9 @@ func newTestDB(t *testing.T) *sql.DB {
 	if _, err := db.Exec(dbpkg.Schema); err != nil {
 		t.Fatalf("applying schema: %v", err)
 	}
+	if _, err := db.Exec(`INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'x')`); err != nil {
+		t.Fatalf("seeding test user: %v", err)
+	}
 	return db
 }
 
@@ -166,7 +169,7 @@ func newTestSyncer(t *testing.T, responses map[string]string) (*DBSyncer, *sql.D
 	t.Helper()
 	client := NewClient(&http.Client{Transport: &fakeTransport{responses: responses}})
 	db := newTestDB(t)
-	return &DBSyncer{Client: client, DB: db}, db
+	return &DBSyncer{Client: client, DB: db, UserID: 1}, db
 }
 
 func TestSyncDayFullDayPopulatesEveryTable(t *testing.T) {

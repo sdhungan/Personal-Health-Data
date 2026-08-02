@@ -383,13 +383,13 @@ func (s *DBSyncer) syncRespiratoryRateSleepSummary(ctx context.Context, day time
 		var sessionID int64
 		err = s.DB.QueryRowContext(ctx, `
 			SELECT id FROM watch_sleep_session
-			WHERE day = ? AND start_time <= ? AND end_time > ?
+			WHERE user_id = ? AND day = ? AND start_time <= ? AND end_time > ?
 			ORDER BY duration_minutes DESC LIMIT 1
-		`, dayStr, sampleTime.Format(time.RFC3339), sampleTime.Format(time.RFC3339)).Scan(&sessionID)
+		`, s.UserID, dayStr, sampleTime.Format(time.RFC3339), sampleTime.Format(time.RFC3339)).Scan(&sessionID)
 		if errors.Is(err, sql.ErrNoRows) {
 			err = s.DB.QueryRowContext(ctx, `
-				SELECT id FROM watch_sleep_session WHERE day = ? AND is_main_sleep = 1 LIMIT 1
-			`, dayStr).Scan(&sessionID)
+				SELECT id FROM watch_sleep_session WHERE user_id = ? AND day = ? AND is_main_sleep = 1 LIMIT 1
+			`, s.UserID, dayStr).Scan(&sessionID)
 		}
 		if errors.Is(err, sql.ErrNoRows) {
 			continue // no session to attach this sample to yet

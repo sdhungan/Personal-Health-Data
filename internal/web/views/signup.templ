@@ -1,0 +1,42 @@
+package views
+
+// SignupPage creates a new account. On success the handler logs the user
+// in immediately and redirects to /onboarding/connect — see
+// internal/web's handleSignup.
+templ SignupPage(errMsg string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>Create an account — Personal Health Dashboard</title>
+			<link rel="stylesheet" href="/static/style.css"/>
+		</head>
+		<body>
+			<main class="auth-page">
+				<h1 class="brand-title">Create an account</h1>
+				<form method="post" action="/signup" class="body-form">
+					<div class="body-field">
+						<label for="username">Username</label>
+						<input id="username" name="username" type="text" autocomplete="username" required autofocus/>
+					</div>
+					<div class="body-field">
+						<label for="password">Password</label>
+						<input id="password" name="password" type="password" autocomplete="new-password" minlength="8" required/>
+					</div>
+					<div class="body-field">
+						<label for="confirm">Confirm password</label>
+						<input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="8" required/>
+					</div>
+					if errMsg != "" {
+						<p class="journal-error">{ errMsg }</p>
+					}
+					<div class="body-form-footer">
+						<button type="submit" class="body-carry-btn">Create account</button>
+					</div>
+				</form>
+				<p><a href="/login">Already have an account? Log in</a></p>
+			</main>
+		</body>
+	</html>
+}

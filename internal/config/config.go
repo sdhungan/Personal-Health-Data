@@ -1,8 +1,8 @@
-// Package config loads config.yaml (see ARCHITECTURE.md §4): ports, the
-// sync interval, and the Google Cloud OAuth client the user must obtain
-// themselves. Cronometer credentials are deliberately not here — see
-// "healthd auth cronometer" — they go straight to an encrypted file, never
-// plaintext config.yaml.
+// Package config loads config.yaml (see ARCHITECTURE.md §4): ports and the
+// sync interval. Neither the Google OAuth client nor Cronometer credentials
+// live here — see internal/googleauth.SaveClientJSON / "healthd auth
+// cronometer" — they go straight to an encrypted file, never plaintext
+// config.yaml.
 package config
 
 import (
@@ -19,18 +19,11 @@ type Config struct {
 	Google              GoogleConfig `yaml:"google"`
 }
 
-// GoogleConfig points at the OAuth client credentials for the Google
-// Health API. These come from a Google Cloud project the user registers
-// themselves (Google Health API scopes are Restricted, so this can't be a
-// credential healthd ships with) — see the "auth google" command's error
-// message for setup pointers.
+// GoogleConfig holds config.yaml-level Google settings that aren't secret
+// material — the OAuth client itself (client_id/client_secret) is uploaded
+// through the dashboard's settings page instead and stored encrypted (see
+// internal/googleauth.SaveClientJSON, internal/paths.GoogleClientSecretFile).
 type GoogleConfig struct {
-	// CredentialsFile is the path to the OAuth client JSON downloaded from
-	// Google Cloud Console ("Download JSON" on the client's page) — the
-	// standard client_secret_*.json format, parsed with
-	// golang.org/x/oauth2/google.ConfigFromJSON. Relative paths resolve
-	// against the current working directory.
-	CredentialsFile string `yaml:"credentials_file"`
 	// CallbackPort is the local port healthd's callback listener binds to.
 	// For a Desktop/"installed"-type OAuth client (redirect_uris:
 	// ["http://localhost"] with no port), Google accepts any localhost

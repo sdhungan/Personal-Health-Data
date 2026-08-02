@@ -21,6 +21,8 @@ func TestSchemaExecutes(t *testing.T) {
 	}
 
 	wantTables := []string{
+		"users",
+		"web_session",
 		"user_profile",
 		"sync_state",
 		"watch_daily_summary",
@@ -71,17 +73,21 @@ func TestBodyMeasurementViewCoalesces(t *testing.T) {
 		t.Fatalf("executing schema: %v", err)
 	}
 
+	_, err = conn.Exec(`INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'x')`)
+	if err != nil {
+		t.Fatalf("seeding test user: %v", err)
+	}
 	_, err = conn.Exec(`
 		INSERT INTO body_measurement
-			(day, weight_kg_raw, weight_kg_override, height_cm_raw, waist_cm, neck_cm, body_fat_pct_raw, body_fat_pct_calculated)
+			(user_id, day, weight_kg_raw, weight_kg_override, height_cm_raw, waist_cm, neck_cm, body_fat_pct_raw, body_fat_pct_calculated)
 		VALUES
-			('2026-07-29', 80.0, 78.5, 180.0, 85.0, 38.0, NULL, 18.4)`)
+			(1, '2026-07-29', 80.0, 78.5, 180.0, 85.0, 38.0, NULL, 18.4)`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 
 	var weightKg, heightCm, bodyFatPct float64
-	err = conn.QueryRow(`SELECT weight_kg, height_cm, body_fat_pct FROM v_body_measurement WHERE day = '2026-07-29'`).
+	err = conn.QueryRow(`SELECT weight_kg, height_cm, body_fat_pct FROM v_body_measurement WHERE user_id = 1 AND day = '2026-07-29'`).
 		Scan(&weightKg, &heightCm, &bodyFatPct)
 	if err != nil {
 		t.Fatalf("query view: %v", err)

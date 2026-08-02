@@ -10,7 +10,6 @@ import (
 
 	"golang.org/x/oauth2"
 
-	"github.com/sdhungan/Personal-Health-Data/internal/config"
 	"github.com/sdhungan/Personal-Health-Data/internal/crypto"
 )
 
@@ -79,9 +78,12 @@ func (s *savingTokenSource) Token() (*oauth2.Token, error) {
 
 // HTTPClient loads the saved token and returns an *http.Client that
 // authenticates Google Health API requests, transparently refreshing (and
-// re-persisting) the access token as needed.
-func HTTPClient(ctx context.Context, tokenPath string, key crypto.Key, cfg *config.Config) (*http.Client, error) {
-	oauthCfg, err := OAuthConfig(cfg)
+// re-persisting) the access token as needed. clientJSON is the app-wide
+// OAuth client (see LoadClientJSON); callbackPort is config.yaml's
+// google.callback_port — both are only used to rebuild the oauth2.Config
+// a refresh needs, the callback listener itself isn't involved here.
+func HTTPClient(ctx context.Context, tokenPath string, key crypto.Key, clientJSON []byte, callbackPort int) (*http.Client, error) {
+	oauthCfg, err := OAuthConfig(clientJSON, callbackPort)
 	if err != nil {
 		return nil, err
 	}

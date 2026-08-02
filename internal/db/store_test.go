@@ -52,7 +52,8 @@ func TestInitThenOpenRoundTrip(t *testing.T) {
 	}
 
 	if _, err := store.DB().Exec(
-		`INSERT INTO user_profile (id, sex, birth_date) VALUES (1, 'male', '1990-01-01')`,
+		`INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'x');
+		 INSERT INTO user_profile (user_id, sex, birth_date) VALUES (1, 'male', '1990-01-01')`,
 	); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestInitThenOpenRoundTrip(t *testing.T) {
 	defer store2.Close()
 
 	var sex string
-	if err := store2.DB().QueryRow(`SELECT sex FROM user_profile WHERE id = 1`).Scan(&sex); err != nil {
+	if err := store2.DB().QueryRow(`SELECT sex FROM user_profile WHERE user_id = 1`).Scan(&sex); err != nil {
 		t.Fatalf("querying re-opened database: %v", err)
 	}
 	if sex != "male" {
@@ -127,7 +128,8 @@ func TestCheckpointPersistsWithoutClosing(t *testing.T) {
 	defer store.Close()
 
 	if _, err := store.DB().Exec(
-		`INSERT INTO user_profile (id, sex) VALUES (1, 'female')`,
+		`INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'x');
+		 INSERT INTO user_profile (user_id, sex) VALUES (1, 'female')`,
 	); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -144,7 +146,7 @@ func TestCheckpointPersistsWithoutClosing(t *testing.T) {
 	defer other.Close()
 
 	var sex string
-	if err := other.DB().QueryRow(`SELECT sex FROM user_profile WHERE id = 1`).Scan(&sex); err != nil {
+	if err := other.DB().QueryRow(`SELECT sex FROM user_profile WHERE user_id = 1`).Scan(&sex); err != nil {
 		t.Fatalf("querying checkpointed database: %v", err)
 	}
 	if sex != "female" {
@@ -167,7 +169,8 @@ func TestOpenRecoversFromUncleanShutdown(t *testing.T) {
 	}
 
 	if _, err := store.DB().Exec(
-		`INSERT INTO user_profile (id, sex) VALUES (1, 'female')`,
+		`INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'x');
+		 INSERT INTO user_profile (user_id, sex) VALUES (1, 'female')`,
 	); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -185,7 +188,7 @@ func TestOpenRecoversFromUncleanShutdown(t *testing.T) {
 	defer recovered.Close()
 
 	var sex string
-	if err := recovered.DB().QueryRow(`SELECT sex FROM user_profile WHERE id = 1`).Scan(&sex); err != nil {
+	if err := recovered.DB().QueryRow(`SELECT sex FROM user_profile WHERE user_id = 1`).Scan(&sex); err != nil {
 		t.Fatalf("querying recovered database: %v", err)
 	}
 	if sex != "female" {

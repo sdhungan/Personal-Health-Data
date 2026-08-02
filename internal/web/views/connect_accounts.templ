@@ -1,0 +1,83 @@
+package views
+
+// OnboardingPage is shown right after signup (and reachable any time after,
+// at /onboarding/connect): a one-time prompt to connect Google Health and
+// Cronometer, each with an explicit skip — skipping is allowed, but shows a
+// warning about exactly which tiles won't have data until it's connected
+// later. Connecting either one is independent of the other, matching the
+// rest of the app's "a Cronometer outage/breakage never touches watch data
+// or vice versa" posture (see ARCHITECTURE.md).
+templ OnboardingPage(googleConnected bool, googleError string, cronometerConnected bool, cronometerError string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>Connect your accounts — Personal Health Dashboard</title>
+			<link rel="stylesheet" href="/static/style.css"/>
+		</head>
+		<body>
+			<main class="auth-page auth-page-wide">
+				<h1 class="brand-title">Connect your accounts</h1>
+				<p>Connect Google Health and Cronometer so healthd can start syncing your data automatically in the background. Either one can be connected later instead — nothing here is required to continue.</p>
+
+				<section class="tile" data-category="activity">
+					<div class="tile-header">
+						<div class="tile-header-left">
+							<span class="tile-title">Google Health</span>
+						</div>
+					</div>
+					<div class="tile-body">
+						if googleConnected {
+							<p class="body-saved-status">Connected.</p>
+						} else {
+							<p>Opens Google's consent screen in a new browser tab — approve access, then come back here.</p>
+							<p class="journal-error">Skipping means Steps, Heart Rate, Sleep, Body Measurements (from a connected scale), and every other watch-synced tile won't have data until you connect this later.</p>
+							if googleError != "" {
+								<p class="journal-error">{ googleError }</p>
+							}
+							<form method="post" action="/onboarding/connect/google">
+								<button type="submit" class="body-carry-btn">Connect Google Health</button>
+							</form>
+						}
+					</div>
+				</section>
+
+				<section class="tile" data-category="nutrition">
+					<div class="tile-header">
+						<div class="tile-header-left">
+							<span class="tile-title">Cronometer</span>
+						</div>
+					</div>
+					<div class="tile-body">
+						if cronometerConnected {
+							<p class="body-saved-status">Connected.</p>
+						} else {
+							<p class="journal-error">Skipping means Nutrition (energy, macros) and the Food Log tile won't have data until you connect this later.</p>
+							if cronometerError != "" {
+								<p class="journal-error">{ cronometerError }</p>
+							}
+							<form method="post" action="/onboarding/connect/cronometer" class="body-form">
+								<div class="body-field">
+									<label for="crono-email">Cronometer email</label>
+									<input id="crono-email" name="crono_username" type="email" autocomplete="off" required/>
+								</div>
+								<div class="body-field">
+									<label for="crono-password">Cronometer password</label>
+									<input id="crono-password" name="crono_password" type="password" autocomplete="off" required/>
+								</div>
+								<div class="body-form-footer">
+									<button type="submit" class="body-carry-btn">Connect Cronometer</button>
+								</div>
+							</form>
+						}
+					</div>
+				</section>
+
+				<form method="post" action="/onboarding/skip">
+					<button type="submit" class="body-carry-btn">Continue to Dashboard</button>
+				</form>
+			</main>
+		</body>
+	</html>
+}

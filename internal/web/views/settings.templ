@@ -1,0 +1,67 @@
+package views
+
+// GoogleClientSettingsPage lets any logged-in user upload/replace the
+// app-wide Google OAuth client JSON (client_id/client_secret) — a
+// one-per-deployment secret registered once in Google Cloud Console, not a
+// per-account credential (every account's own Google login still happens
+// through Google's own real consent screen once this is set — see
+// ARCHITECTURE.md §10). configured reports whether one is already on file.
+// successMsg is only set right after a fresh upload (via ?uploaded=1, see
+// handleGoogleClientSettingsPage) — shown as its own distinct banner so
+// replacing an already-configured client doesn't look like a no-op: before
+// this, the page just said "a client is configured" whether you'd uploaded
+// a new one or not, which gave no visible sign the upload had taken effect.
+templ GoogleClientSettingsPage(configured bool, successMsg, errMsg string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>Google settings — Personal Health Dashboard</title>
+			<link rel="stylesheet" href="/static/style.css"/>
+		</head>
+		<body>
+			<main class="auth-page auth-page-wide">
+				<h1 class="brand-title">Google OAuth client</h1>
+				<p>
+					This is the one Google Cloud OAuth client every account's own
+					"Connect Google Health" button authorizes through — not a
+					per-account credential. Registered once at
+					<a href="https://console.cloud.google.com" target="_blank" rel="noopener">console.cloud.google.com</a>
+					(enable the Google Health API, create an OAuth client, download its
+					client JSON). Confirming an upload here replaces it for every
+					account on this healthd instance, immediately.
+				</p>
+
+				if successMsg != "" {
+					<p class="body-saved-status">&#10003; { successMsg }</p>
+				} else if configured {
+					<p class="body-saved-status">A client is currently configured.</p>
+				} else {
+					<p class="journal-error">No client configured yet — "Connect Google Health" won't work for any account until one is uploaded.</p>
+				}
+				if errMsg != "" {
+					<p class="journal-error">{ errMsg }</p>
+				}
+
+				<form method="post" action="/settings/google-client" enctype="multipart/form-data" class="body-form">
+					<div class="body-field">
+						<label for="client-json">Client JSON file</label>
+						<input id="client-json" name="client_json" type="file" accept="application/json" required/>
+					</div>
+					<div class="body-form-footer">
+						<button type="submit" class="body-carry-btn">
+							if configured {
+								Confirm &amp; Replace
+							} else {
+								Confirm &amp; Upload
+							}
+						</button>
+					</div>
+				</form>
+
+				<p><a href="/">&larr; Back to dashboard</a></p>
+			</main>
+		</body>
+	</html>
+}

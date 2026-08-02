@@ -52,6 +52,8 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newAuthCmd())
 	cmd.AddCommand(newDBCmd())
 	cmd.AddCommand(newServeCmd())
+	cmd.AddCommand(newUserCmd())
+	cmd.AddCommand(newGoogleClientCmd())
 
 	return cmd
 }

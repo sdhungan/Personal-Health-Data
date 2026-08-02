@@ -89,7 +89,7 @@ func boolJS(b bool) string {
 // initialSignals is the data-signals bootstrap for the outer <html>
 // element on a full page load.
 func initialSignals(day string) string {
-	b, _ := json.Marshal(map[string]any{"day": day, "view": "data", "detailOpen": false})
+	b, _ := json.Marshal(map[string]any{"day": day, "view": "data", "detailOpen": false, "userMenuOpen": false})
 	return string(b)
 }
 

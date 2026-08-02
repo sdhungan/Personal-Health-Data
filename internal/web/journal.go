@@ -14,9 +14,9 @@ import (
 	"github.com/sdhungan/Personal-Health-Data/internal/web/views"
 )
 
-func fetchJournal(ctx context.Context, db *sql.DB, day string) (views.JournalData, error) {
+func fetchJournal(ctx context.Context, db *sql.DB, userID int64, day string) (views.JournalData, error) {
 	var content sql.NullString
-	err := db.QueryRowContext(ctx, `SELECT notes FROM daily_journal WHERE day = ?`, day).Scan(&content)
+	err := db.QueryRowContext(ctx, `SELECT notes FROM daily_journal WHERE user_id = ? AND day = ?`, userID, day).Scan(&content)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return views.JournalData{}, fmt.Errorf("querying daily_journal for %s: %w", day, err)
 	}
@@ -29,13 +29,13 @@ func fetchJournal(ctx context.Context, db *sql.DB, day string) (views.JournalDat
 	return j, nil
 }
 
-func saveJournal(ctx context.Context, db *sql.DB, day, content string) error {
+func saveJournal(ctx context.Context, db *sql.DB, userID int64, day, content string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO daily_journal (day, notes, created_at, updated_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(day) DO UPDATE SET notes = excluded.notes, updated_at = excluded.updated_at
-	`, day, content, now, now)
+		INSERT INTO daily_journal (user_id, day, notes, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, day) DO UPDATE SET notes = excluded.notes, updated_at = excluded.updated_at
+	`, userID, day, content, now, now)
 	if err != nil {
 		return fmt.Errorf("saving journal for %s: %w", day, err)
 	}

@@ -15,8 +15,6 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
-
-	"github.com/sdhungan/Personal-Health-Data/internal/config"
 )
 
 // consentTimeout bounds how long RunConsentFlow waits for the user to
@@ -31,9 +29,10 @@ type callbackResult struct {
 // RunConsentFlow starts a local callback listener, opens the Google
 // consent screen, and exchanges the resulting code for a token. It does
 // not persist the token — callers are expected to pass the result to
-// SaveToken.
-func RunConsentFlow(ctx context.Context, cfg *config.Config) (*oauth2.Token, error) {
-	oauthCfg, err := OAuthConfig(cfg)
+// SaveToken. clientJSON is the app-wide OAuth client (see LoadClientJSON);
+// callbackPort is config.yaml's google.callback_port.
+func RunConsentFlow(ctx context.Context, clientJSON []byte, callbackPort int) (*oauth2.Token, error) {
+	oauthCfg, err := OAuthConfig(clientJSON, callbackPort)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +68,7 @@ func RunConsentFlow(ctx context.Context, cfg *config.Config) (*oauth2.Token, err
 		results <- callbackResult{code: code}
 	})
 
-	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Google.CallbackPort)
+	addr := fmt.Sprintf("127.0.0.1:%d", callbackPort)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("starting local callback listener on %s: %w", addr, err)
@@ -86,7 +85,16 @@ func RunConsentFlow(ctx context.Context, cfg *config.Config) (*oauth2.Token, err
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
-	authURL := oauthCfg.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent"))
+	// prompt=select_account forces Google's account chooser to show every
+	// time, instead of silently reusing whatever Google account is already
+	// active in the browser — important here since one machine/browser can
+	// easily be signed into several Google accounts and different healthd
+	// accounts may want to connect different ones. "consent" is combined
+	// with it (space-separated, both values in one prompt param) so a
+	// refresh token is still always issued, not just on first-ever
+	// authorization — Google otherwise omits it on a repeat auth for an
+	// account that already granted access before.
+	authURL := oauthCfg.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "select_account consent"))
 	fmt.Println("Open this URL to authorize healthd with your Google Health data (opening your browser now):")
 	fmt.Println(authURL)
 	if err := openBrowserFunc(authURL); err != nil {

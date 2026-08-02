@@ -1,0 +1,44 @@
+package views
+
+// AccountSettingsPage is the per-account settings page (username display +
+// irreversible self-service account deletion) — distinct from
+// GoogleClientSettingsPage, which configures the app-wide Google OAuth
+// client shared by every account rather than anything specific to this one.
+// deleteErr is only set when a delete attempt failed (wrong password, or a
+// deletion error) — a successful delete never renders this page again, it
+// redirects straight to /login (see handleAccountDelete).
+templ AccountSettingsPage(username, deleteErr string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>Account — Personal Health Dashboard</title>
+			<link rel="stylesheet" href="/static/style.css"/>
+		</head>
+		<body>
+			<main class="auth-page">
+				<h1 class="brand-title">Account</h1>
+				<p>Signed in as <strong>{ username }</strong>.</p>
+
+				<form method="post" action="/settings/account/delete" class="body-form" onsubmit="return confirm('This permanently deletes your account and every bit of your synced data. This cannot be undone. Continue?')">
+					<div class="body-field">
+						<label for="confirm-password">Confirm your password to delete your account</label>
+						<input id="confirm-password" name="password" type="password" autocomplete="current-password" required/>
+					</div>
+					if deleteErr != "" {
+						<p class="journal-error">{ deleteErr }</p>
+					}
+					<div class="body-form-footer">
+						<button type="submit" class="body-carry-btn danger-btn">
+							@iconTrash()
+							Delete my account and all data
+						</button>
+					</div>
+				</form>
+
+				<p><a href="/">&larr; Back to dashboard</a></p>
+			</main>
+		</body>
+	</html>
+}

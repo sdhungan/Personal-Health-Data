@@ -1,4 +1,4 @@
--- healthd initial schema
+-- healthd schema
 --
 -- Source-of-truth notes (see ARCHITECTURE.md §3):
 --   * Tables prefixed `watch_` are populated exclusively by the Google Health
@@ -22,28 +22,73 @@
 --     access layer per the architecture doc; the `v_*` views below exist
 --     only as read-time convenience, not as the enforcement point.
 --
+-- Multi-user note: every table below (other than `users` and `web_session`
+-- themselves) carries a `user_id` column folded into its primary key/unique
+-- constraint, so one encrypted database file safely holds many accounts'
+-- data. `user_id` is always a bound value supplied by the caller from an
+-- authenticated session or an internal sync job identity — never something
+-- the DB access layer builds from request/query-parameter text — see
+-- ARCHITECTURE.md's multi-user section. This project has no real deployed
+-- data to preserve yet, so this shape went straight into schema.sql the same
+-- way the original watch_* rewrite did — see internal/db/migrations.go's own
+-- comment and prerequisite.md.
+--
 -- Dates are stored as ISO-8601 'YYYY-MM-DD' TEXT (SQLite has no native DATE
 -- type). Timestamps are ISO-8601 TEXT in UTC.
 
 PRAGMA foreign_keys = ON;
 
 -- =============================================================================
+-- Accounts / sessions
+-- =============================================================================
+
+-- One row per healthd account. password_hash is a bcrypt hash used only to
+-- verify a login attempt; it is never usable as key material. A second,
+-- independent value — an Argon2id key derived from the same plaintext
+-- password with its own salt (see internal/crypto.DeriveKey) — is what
+-- actually encrypts this user's Google/Cronometer provider credentials, and
+-- lives in a per-user keyfile on disk (keys/users/<id>.key), not in this
+-- table; see internal/webauth and ARCHITECTURE.md.
+CREATE TABLE users (
+    id            INTEGER PRIMARY KEY,
+    username      TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- Dashboard login sessions (see internal/webauth). token_hash is
+-- SHA-256(raw token) — the raw token itself is the browser cookie value and
+-- is never persisted, so "healthd db decrypt" (a deliberate, supported
+-- plaintext-dump operation) can never leak a live, usable session bearer
+-- credential. last_seen_at implements a 24h *sliding* inactivity expiry
+-- (touched on every authenticated request), not a fixed absolute one.
+CREATE TABLE web_session (
+    token_hash   TEXT PRIMARY KEY,
+    user_id      INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX idx_web_session_user ON web_session (user_id);
+
+-- =============================================================================
 -- Reference / bookkeeping
 -- =============================================================================
 
--- Singleton row of facts about the person, needed for calculations (e.g. the
--- US Navy body-fat formula needs sex, and hip circumference only applies to
--- the female variant of that formula).
+-- One row per user, facts needed for calculations (e.g. the US Navy
+-- body-fat formula needs sex, and hip circumference only applies to the
+-- female variant of that formula).
 CREATE TABLE user_profile (
-    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    user_id    INTEGER PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
     sex        TEXT CHECK (sex IN ('male', 'female')),
     birth_date TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
--- Drives the sync job's day-completeness logic for each source
--- independently.
+-- Drives the sync job's day-completeness logic for each (user, source)
+-- pair independently.
 --   pending  = never synced, or synced but not yet resolved either way.
 --   partial  = today's row while the day is still in progress; always
 --              re-synced, never auto-promoted to complete/missing while
@@ -58,12 +103,13 @@ CREATE TABLE user_profile (
 -- not something the scheduler does on its own) is the only way to revisit
 -- one afterwards.
 CREATE TABLE sync_state (
+    user_id        INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     source         TEXT NOT NULL CHECK (source IN ('google_health', 'cronometer')),
     day            TEXT NOT NULL,
     status         TEXT NOT NULL CHECK (status IN ('pending', 'partial', 'complete', 'missing')) DEFAULT 'pending',
     last_synced_at TEXT,
     updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    PRIMARY KEY (source, day)
+    PRIMARY KEY (user_id, source, day)
 );
 
 -- =============================================================================
@@ -93,11 +139,11 @@ CREATE TABLE sync_state (
 -- their internal structure is genuinely bespoke, kept as their own tables.
 -- =============================================================================
 
--- DailyScalar: one row per calendar day, covering everything the Google
--- Health API exposes as a daily aggregate or that we roll up ourselves.
--- `raw_payload` keeps the full JSON response for that day so a first-pass
--- column set can't silently lose data -- future columns can be backfilled
--- from it without re-hitting the API.
+-- DailyScalar: one row per user per calendar day, covering everything the
+-- Google Health API exposes as a daily aggregate or that we roll up
+-- ourselves. `raw_payload` keeps the full JSON response for that day so a
+-- first-pass column set can't silently lose data -- future columns can be
+-- backfilled from it without re-hitting the API.
 -- kcal_burned_google/kcal_burned_cronometer (on cronometer_daily_nutrition)
 -- are deliberately two separate columns, not one: Google's watch-based
 -- estimate and Cronometer's own (BMR + activity + food thermic-effect)
@@ -106,7 +152,8 @@ CREATE TABLE sync_state (
 -- the same Timeline fetch that populates their _sample tables below (same
 -- pattern heart-rate already uses) -- not a separate "last sample" query.
 CREATE TABLE watch_daily_summary (
-    day                      TEXT PRIMARY KEY,
+    user_id                  INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    day                      TEXT NOT NULL,
     steps_total              INTEGER,
     distance_m                REAL,
     floors_climbed            INTEGER,
@@ -143,7 +190,8 @@ CREATE TABLE watch_daily_summary (
     source_synced_at          TEXT,
     raw_payload               TEXT,
     created_at                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    updated_at                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    updated_at                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (user_id, day)
 );
 
 -- DailyByCategory: minutes of active-minutes per activity level
@@ -151,10 +199,11 @@ CREATE TABLE watch_daily_summary (
 -- reason the heart-rate-zone tables below already use this shape: a fixed
 -- enum breakdown is still a breakdown, not one more flat column per value.
 CREATE TABLE watch_active_minutes_by_level (
+    user_id        INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     day            TEXT NOT NULL,
     activity_level TEXT NOT NULL,
     minutes        INTEGER,
-    PRIMARY KEY (day, activity_level)
+    PRIMARY KEY (user_id, day, activity_level)
 );
 
 -- DailyByCategory: active zone minutes per heart-rate zone
@@ -162,21 +211,23 @@ CREATE TABLE watch_active_minutes_by_level (
 -- watch_heart_rate_zone_minutes/watch_calories_by_zone below, since it's
 -- the same enum (HeartRateZoneType), just a different measurement.
 CREATE TABLE watch_active_zone_minutes_by_zone (
+    user_id   INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     day       TEXT NOT NULL,
     zone_type TEXT NOT NULL,
     minutes   INTEGER,
-    PRIMARY KEY (day, zone_type)
+    PRIMARY KEY (user_id, day, zone_type)
 );
 
 -- Hourly: step buckets. Low volume (24 rows/day) so, unlike heart rate,
 -- it's kept in full permanently rather than as a prunable cache.
 CREATE TABLE watch_steps_hourly (
+    user_id   INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     day       TEXT NOT NULL,
     hour      INTEGER NOT NULL CHECK (hour BETWEEN 0 AND 23),
     steps     INTEGER,
     distance_m REAL,
     calories  REAL,
-    PRIMARY KEY (day, hour)
+    PRIMARY KEY (user_id, day, hour)
 );
 
 -- Timeline: rolling CACHE of fine-grained (e.g. 1-5min) heart rate samples.
@@ -186,9 +237,11 @@ CREATE TABLE watch_steps_hourly (
 -- day whose cache has been pruned, fetch it live from the Google Health
 -- API instead of treating this table as complete history.
 CREATE TABLE watch_heart_rate_intraday (
-    recorded_at TEXT PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    recorded_at TEXT NOT NULL,
     bpm         REAL NOT NULL,
-    cached_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    cached_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (user_id, recorded_at)
 );
 
 CREATE INDEX idx_watch_heart_rate_intraday_cached_at ON watch_heart_rate_intraday (cached_at);
@@ -197,18 +250,22 @@ CREATE INDEX idx_watch_heart_rate_intraday_cached_at ON watch_heart_rate_intrada
 -- The sync job also derives watch_daily_summary's
 -- blood_glucose_*/core_body_temperature_* avg/min/max from this same fetch.
 CREATE TABLE watch_blood_glucose_sample (
-    recorded_at        TEXT PRIMARY KEY,
+    user_id            INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    recorded_at        TEXT NOT NULL,
     mg_dl              REAL NOT NULL,
     measurement_source TEXT,
     measurement_timing TEXT,
     meal_type          TEXT,
-    specimen           TEXT
+    specimen           TEXT,
+    PRIMARY KEY (user_id, recorded_at)
 );
 
 CREATE TABLE watch_core_body_temperature_sample (
-    recorded_at          TEXT PRIMARY KEY,
+    user_id              INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    recorded_at          TEXT NOT NULL,
     celsius              REAL NOT NULL,
-    measurement_location TEXT
+    measurement_location TEXT,
+    PRIMARY KEY (user_id, recorded_at)
 );
 
 -- SegmentTimeline: sedentary/lightly-active/moderately-active/very-active
@@ -216,19 +273,21 @@ CREATE TABLE watch_core_body_temperature_sample (
 -- is *when* each level occurred, not just a daily total.
 CREATE TABLE watch_activity_level_segment (
     id             INTEGER PRIMARY KEY,
+    user_id        INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     day            TEXT NOT NULL,
     activity_level TEXT NOT NULL,
     start_time     TEXT NOT NULL,
     end_time       TEXT NOT NULL
 );
 
-CREATE INDEX idx_watch_activity_level_segment_day ON watch_activity_level_segment (day);
+CREATE INDEX idx_watch_activity_level_segment_user_day ON watch_activity_level_segment (user_id, day);
 
 -- One row per sleep session (usually one "main sleep" per day, but naps can
 -- add more). Session shape, not one of the five above -- its own bespoke
 -- structure (a SegmentTimeline of stages nested inside it).
 CREATE TABLE watch_sleep_session (
     id                INTEGER PRIMARY KEY,
+    user_id           INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     day               TEXT NOT NULL,
     start_time        TEXT NOT NULL,
     end_time          TEXT NOT NULL,
@@ -245,13 +304,14 @@ CREATE TABLE watch_sleep_session (
     light_resp_rate_bpm   REAL,
     rem_resp_rate_bpm     REAL,
     full_resp_rate_bpm    REAL,
-    UNIQUE (day, start_time)
+    UNIQUE (user_id, day, start_time)
 );
 
-CREATE INDEX idx_watch_sleep_session_day ON watch_sleep_session (day);
+CREATE INDEX idx_watch_sleep_session_user_day ON watch_sleep_session (user_id, day);
 
 -- SegmentTimeline nested inside a sleep session, for detailed
--- hypnogram-style UI views.
+-- hypnogram-style UI views. No user_id of its own -- scoped transitively
+-- through sleep_session_id, same as any other child-of-a-session table.
 CREATE TABLE watch_sleep_stage (
     sleep_session_id INTEGER NOT NULL REFERENCES watch_sleep_session (id) ON DELETE CASCADE,
     stage_type       TEXT NOT NULL CHECK (stage_type IN ('AWAKE', 'LIGHT', 'DEEP', 'REM')),
@@ -267,6 +327,7 @@ CREATE INDEX idx_watch_sleep_stage_session ON watch_sleep_stage (sleep_session_i
 -- separate table.
 CREATE TABLE watch_exercise_session (
     id                  INTEGER PRIMARY KEY,
+    user_id             INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     day                 TEXT NOT NULL,
     exercise_type       TEXT NOT NULL,
     start_time          TEXT NOT NULL,
@@ -276,24 +337,25 @@ CREATE TABLE watch_exercise_session (
     avg_heart_rate_bpm  REAL,
     max_heart_rate_bpm  REAL,
     distance_m          REAL,
-    UNIQUE (day, start_time)
+    UNIQUE (user_id, day, start_time)
 );
 
-CREATE INDEX idx_watch_exercise_session_day ON watch_exercise_session (day);
+CREATE INDEX idx_watch_exercise_session_user_day ON watch_exercise_session (user_id, day);
 
 -- ECG readings and irregular-rhythm notifications. Kept as one table (with a
 -- `type` discriminator) rather than two, since neither is high-volume and
 -- only summary/classification is stored — not raw waveform data.
 CREATE TABLE watch_ecg_reading (
     id                 INTEGER PRIMARY KEY,
+    user_id            INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     type               TEXT NOT NULL CHECK (type IN ('ecg', 'irregular_rhythm')),
     recorded_at        TEXT NOT NULL,
     classification     TEXT,
     avg_heart_rate_bpm REAL,
-    UNIQUE (type, recorded_at)
+    UNIQUE (user_id, type, recorded_at)
 );
 
-CREATE INDEX idx_watch_ecg_reading_recorded_at ON watch_ecg_reading (recorded_at);
+CREATE INDEX idx_watch_ecg_reading_recorded_at ON watch_ecg_reading (user_id, recorded_at);
 
 -- Personalized heart-rate zone BPM thresholds for the day (from
 -- daily-heart-rate-zones) -- despite the name's similarity to
@@ -302,21 +364,23 @@ CREATE INDEX idx_watch_ecg_reading_recorded_at ON watch_ecg_reading (recorded_at
 -- as fitness/resting HR changes), confirmed against a real response. Not
 -- one of the five shapes either -- a definition, not a measurement.
 CREATE TABLE watch_heart_rate_zone_definition (
+    user_id   INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     day       TEXT NOT NULL,
     zone_type TEXT NOT NULL,
     min_bpm   INTEGER,
     max_bpm   INTEGER,
-    PRIMARY KEY (day, zone_type)
+    PRIMARY KEY (user_id, day, zone_type)
 );
 
 -- DailyByCategory: actual minutes spent in each heart-rate zone per day
 -- (from time-in-heart-rate-zone) -- the real time-series counterpart to the
 -- thresholds above.
 CREATE TABLE watch_heart_rate_zone_minutes (
+    user_id   INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     day       TEXT NOT NULL,
     zone_type TEXT NOT NULL,
     minutes   REAL,
-    PRIMARY KEY (day, zone_type)
+    PRIMARY KEY (user_id, day, zone_type)
 );
 
 -- DailyByCategory: calories attributed to time spent in each heart-rate
@@ -324,10 +388,11 @@ CREATE TABLE watch_heart_rate_zone_minutes (
 -- internal/googlehealth/values.go's confidence-level convention) --
 -- Google's reference doesn't document this type's fields directly.
 CREATE TABLE watch_calories_by_zone (
+    user_id   INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     day       TEXT NOT NULL,
     zone_type TEXT NOT NULL,
     kcal      REAL,
-    PRIMARY KEY (day, zone_type)
+    PRIMARY KEY (user_id, day, zone_type)
 );
 
 -- =============================================================================
@@ -336,7 +401,8 @@ CREATE TABLE watch_calories_by_zone (
 -- =============================================================================
 
 CREATE TABLE body_measurement (
-    day                       TEXT PRIMARY KEY,
+    user_id                   INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    day                       TEXT NOT NULL,
     weight_kg_raw             REAL,
     weight_kg_override        REAL,
     height_cm_raw             REAL,
@@ -347,14 +413,17 @@ CREATE TABLE body_measurement (
     body_fat_pct_raw          REAL,
     body_fat_pct_calculated   REAL,
     created_at                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    updated_at                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    updated_at                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (user_id, day)
 );
 
 -- Effective-value convenience view. body_fat_pct prefers a direct
 -- measurement (e.g. a smart scale) over our own circumference-based
--- estimate.
+-- estimate. Callers must still filter WHERE user_id = ? themselves -- this
+-- view resolves raw/override, it does not enforce per-user isolation.
 CREATE VIEW v_body_measurement AS
 SELECT
+    user_id,
     day,
     COALESCE(weight_kg_override, weight_kg_raw) AS weight_kg,
     COALESCE(height_cm_override, height_cm_raw) AS height_cm,
@@ -374,15 +443,13 @@ FROM body_measurement;
 -- useful signal for the sync job's day-completeness heuristic in addition
 -- to our own sync_state bookkeeping.
 CREATE TABLE cronometer_daily_nutrition (
-    day               TEXT PRIMARY KEY,
+    user_id           INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    day               TEXT NOT NULL,
     completed         INTEGER NOT NULL DEFAULT 0,
     energy_kcal       REAL,
     -- Cronometer's own total-expenditure estimate (BMR + activity + food
     -- thermic effect) -- deliberately a separate figure from
     -- watch_daily_summary.kcal_burned_google, not a replacement for it.
-    -- Sits NULL until a Cronometer sync client exists (see
-    -- prerequisite.md -- internal/cli/sync.go's "TODO: run the Cronometer
-    -- sync pass too" is still just a TODO as of this column's addition).
     kcal_burned_cronometer REAL,
     caffeine_mg       REAL,
     water_g           REAL,
@@ -451,7 +518,8 @@ CREATE TABLE cronometer_daily_nutrition (
     tryptophan_g      REAL,
     tyrosine_g        REAL,
     valine_g          REAL,
-    synced_at         TEXT
+    synced_at         TEXT,
+    PRIMARY KEY (user_id, day)
 );
 
 -- Per-entry food diary, same nutrient dictionary as cronometer_daily_nutrition
@@ -459,6 +527,7 @@ CREATE TABLE cronometer_daily_nutrition (
 -- detailed food-log view.
 CREATE TABLE cronometer_serving (
     id                INTEGER PRIMARY KEY,
+    user_id           INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     day               TEXT NOT NULL,
     recorded_time     TEXT NOT NULL,
     meal_group        TEXT,
@@ -532,12 +601,13 @@ CREATE TABLE cronometer_serving (
     valine_g          REAL
 );
 
-CREATE INDEX idx_cronometer_serving_day ON cronometer_serving (day);
+CREATE INDEX idx_cronometer_serving_user_day ON cronometer_serving (user_id, day);
 
 -- Exercise logged manually within Cronometer itself (distinct from
 -- watch_exercise_session, which is watch-recorded).
 CREATE TABLE cronometer_exercise (
     id              INTEGER PRIMARY KEY,
+    user_id         INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     day             TEXT NOT NULL,
     recorded_time   TEXT NOT NULL,
     exercise_name   TEXT NOT NULL,
@@ -546,7 +616,7 @@ CREATE TABLE cronometer_exercise (
     calories_burned REAL
 );
 
-CREATE INDEX idx_cronometer_exercise_day ON cronometer_exercise (day);
+CREATE INDEX idx_cronometer_exercise_user_day ON cronometer_exercise (user_id, day);
 
 -- Generic biometric log as exposed by Cronometer's own biometrics feature
 -- (metric/unit/amount triples — weight, body fat %, blood pressure, etc,
@@ -555,6 +625,7 @@ CREATE INDEX idx_cronometer_exercise_day ON cronometer_exercise (day);
 -- application-level decision for later.
 CREATE TABLE cronometer_biometric (
     id            INTEGER PRIMARY KEY,
+    user_id       INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     day           TEXT NOT NULL,
     recorded_time TEXT NOT NULL,
     metric        TEXT NOT NULL,
@@ -562,14 +633,16 @@ CREATE TABLE cronometer_biometric (
     amount        REAL NOT NULL
 );
 
-CREATE INDEX idx_cronometer_biometric_day ON cronometer_biometric (day);
+CREATE INDEX idx_cronometer_biometric_user_day ON cronometer_biometric (user_id, day);
 
 -- Cronometer's own free-text diary note per day. Separate from
 -- daily_journal below, which is authored directly in our own UI.
 CREATE TABLE cronometer_note (
-    day       TEXT PRIMARY KEY,
+    user_id   INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    day       TEXT NOT NULL,
     note      TEXT,
-    synced_at TEXT
+    synced_at TEXT,
+    PRIMARY KEY (user_id, day)
 );
 
 -- =============================================================================
@@ -577,7 +650,8 @@ CREATE TABLE cronometer_note (
 -- =============================================================================
 
 CREATE TABLE daily_journal (
-    day                   TEXT PRIMARY KEY,
+    user_id               INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    day                   TEXT NOT NULL,
     summary               TEXT,
     notes                 TEXT,
     pitfalls              TEXT,
@@ -587,7 +661,8 @@ CREATE TABLE daily_journal (
     stress_rating         INTEGER CHECK (stress_rating BETWEEN 1 AND 5),
     sleep_quality_rating  INTEGER CHECK (sleep_quality_rating BETWEEN 1 AND 5),
     created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    updated_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    updated_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (user_id, day)
 );
 
 -- Free-form day tagging (illness, travel, alcohol, high-stress-day,
@@ -595,9 +670,10 @@ CREATE TABLE daily_journal (
 -- covers symptom/medication/event logging without over-modeling categories
 -- nobody has asked for concretely yet.
 CREATE TABLE daily_tag (
-    day TEXT NOT NULL,
-    tag TEXT NOT NULL,
-    PRIMARY KEY (day, tag)
+    user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    day     TEXT NOT NULL,
+    tag     TEXT NOT NULL,
+    PRIMARY KEY (user_id, day, tag)
 );
 
 CREATE INDEX idx_daily_tag_tag ON daily_tag (tag);
@@ -606,9 +682,15 @@ CREATE INDEX idx_daily_tag_tag ON daily_tag (tag);
 -- Cross-source dashboard convenience view
 -- =============================================================================
 
+-- Callers must still filter WHERE user_id = ? themselves -- the join keys
+-- below include user_id precisely so that filter is meaningful (without it,
+-- days.user_id/day alone would already correctly keep one user's watch row
+-- from ever matching another user's nutrition row for the same calendar
+-- day).
 CREATE VIEW v_daily_overview AS
 SELECT
-    w.day,
+    days.user_id,
+    days.day,
     w.steps_total,
     w.active_minutes,
     w.kcal_burned_google,
@@ -625,11 +707,11 @@ SELECT
     j.energy_rating,
     j.stress_rating,
     j.sleep_quality_rating
-FROM (SELECT DISTINCT day FROM watch_daily_summary
-      UNION SELECT DISTINCT day FROM cronometer_daily_nutrition
-      UNION SELECT DISTINCT day FROM body_measurement
-      UNION SELECT DISTINCT day FROM daily_journal) AS days
-LEFT JOIN watch_daily_summary w ON w.day = days.day
-LEFT JOIN cronometer_daily_nutrition c ON c.day = days.day
-LEFT JOIN v_body_measurement bm ON bm.day = days.day
-LEFT JOIN daily_journal j ON j.day = days.day;
+FROM (SELECT user_id, day FROM watch_daily_summary
+      UNION SELECT user_id, day FROM cronometer_daily_nutrition
+      UNION SELECT user_id, day FROM body_measurement
+      UNION SELECT user_id, day FROM daily_journal) AS days
+LEFT JOIN watch_daily_summary w ON w.user_id = days.user_id AND w.day = days.day
+LEFT JOIN cronometer_daily_nutrition c ON c.user_id = days.user_id AND c.day = days.day
+LEFT JOIN v_body_measurement bm ON bm.user_id = days.user_id AND bm.day = days.day
+LEFT JOIN daily_journal j ON j.user_id = days.user_id AND j.day = days.day;

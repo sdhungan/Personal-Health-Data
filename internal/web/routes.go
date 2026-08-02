@@ -3,12 +3,16 @@ package web
 import (
 	"io/fs"
 
+	"github.com/sdhungan/Personal-Health-Data/internal/webauth"
 	"github.com/sdhungan/Personal-Health-Data/internal/web/views"
 )
 
 // registerRoutes wires every endpoint under views.APIPrefix (the same
 // prefix every backend URL built in the views package resolves against —
-// see views.APIURL) plus the page and static asset routes.
+// see views.APIURL) plus the page and static asset routes. Every route
+// other than /login, /signup, and /static sits behind webauth's session
+// middleware (see webauth.Middleware) — a missing/expired session redirects
+// page requests to /login and 401s API requests.
 func (s *Server) registerRoutes() {
 	staticSub, err := fs.Sub(staticFS, "static")
 	if err != nil {
@@ -16,9 +20,25 @@ func (s *Server) registerRoutes() {
 	}
 	s.echo.StaticFS("/static", staticSub)
 
-	s.echo.GET("/", s.handleIndex)
+	s.echo.GET("/login", s.handleLoginPage)
+	s.echo.POST("/login", s.handleLogin)
+	s.echo.GET("/signup", s.handleSignupPage)
+	s.echo.POST("/signup", s.handleSignup)
 
-	api := s.echo.Group(views.APIPrefix)
+	auth := webauth.Middleware(s.DB, views.APIPrefix)
+
+	s.echo.GET("/", s.handleIndex, auth)
+	s.echo.POST("/logout", s.handleLogout, auth)
+	s.echo.GET("/settings/google-client", s.handleGoogleClientSettingsPage, auth)
+	s.echo.POST("/settings/google-client", s.handleGoogleClientUpload, auth)
+	s.echo.GET("/settings/account", s.handleAccountSettingsPage, auth)
+	s.echo.POST("/settings/account/delete", s.handleAccountDelete, auth)
+	s.echo.GET("/onboarding/connect", s.handleOnboardingPage, auth)
+	s.echo.POST("/onboarding/connect/google", s.handleOnboardingConnectGoogle, auth)
+	s.echo.POST("/onboarding/connect/cronometer", s.handleOnboardingConnectCronometer, auth)
+	s.echo.POST("/onboarding/skip", s.handleOnboardingSkip, auth)
+
+	api := s.echo.Group(views.APIPrefix, auth)
 	api.GET("/view", s.handleView)
 	api.GET("/tile", s.handleTile)
 	api.GET("/activity", s.handleActivity)

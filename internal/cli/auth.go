@@ -11,9 +11,11 @@ import (
 	"golang.org/x/term"
 
 	"github.com/sdhungan/Personal-Health-Data/internal/config"
-	"github.com/sdhungan/Personal-Health-Data/internal/cronometer"
 	"github.com/sdhungan/Personal-Health-Data/internal/crypto"
+	"github.com/sdhungan/Personal-Health-Data/internal/cronometer"
+	"github.com/sdhungan/Personal-Health-Data/internal/db"
 	"github.com/sdhungan/Personal-Health-Data/internal/googleauth"
+	"github.com/sdhungan/Personal-Health-Data/internal/webauth"
 )
 
 func newAuthCmd() *cobra.Command {
@@ -29,27 +31,50 @@ func newAuthCmd() *cobra.Command {
 // newAuthCronometerCmd prompts for the Cronometer username/password
 // (hidden input, same term.ReadPassword pattern "healthd db init" uses for
 // the encryption passphrase — see db.go), verifies them with a real login
-// before saving anything, and encrypts them to CronometerCredentialsFile.
-// This replaces config.yaml's plaintext cronometer.username/password as the
-// long-term store (see cronometer-integration.md's "Credential handling" —
-// same posture as the Google OAuth client secret, never plaintext at rest).
+// before saving anything, and encrypts them under --user's own per-user
+// path/key (the same credential-encryption key their account password
+// derived at signup — see internal/webauth). This is the headless
+// alternative to the dashboard's own onboarding/account-settings flow, for
+// setups where opening a browser first isn't convenient.
 func newAuthCronometerCmd() *cobra.Command {
-	return &cobra.Command{
+	var username string
+
+	cmd := &cobra.Command{
 		Use:   "cronometer",
 		Short: "Save Cronometer credentials for the sync job (encrypted at rest)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			key, err := crypto.LoadKey(appPaths.DBKeyFile())
+			ctx := context.Background()
+
+			dbKey, err := crypto.LoadKey(appPaths.DBKeyFile())
 			if err != nil {
 				return fmt.Errorf("loading key material (run \"healthd db init\" first?): %w", err)
+			}
+			store, err := db.Open(appPaths.DBFile(), appPaths.DBWorkingFile(), dbKey)
+			if err != nil {
+				return fmt.Errorf("opening database (run \"healthd db init\" first?): %w", err)
+			}
+			defer func() {
+				if cerr := store.Close(); cerr != nil {
+					fmt.Fprintln(os.Stderr, "warning: closing database:", cerr)
+				}
+			}()
+
+			userID, err := resolveUserID(ctx, store.DB(), username)
+			if err != nil {
+				return err
+			}
+			userKey, err := webauth.CredentialKey(appPaths, userID)
+			if err != nil {
+				return fmt.Errorf("loading credential key for %q: %w", username, err)
 			}
 
 			fmt.Print("Cronometer email: ")
 			reader := bufio.NewReader(os.Stdin)
-			username, err := reader.ReadString('\n')
+			cronoUsername, err := reader.ReadString('\n')
 			if err != nil {
 				return fmt.Errorf("reading email: %w", err)
 			}
-			username = strings.TrimSpace(username)
+			cronoUsername = strings.TrimSpace(cronoUsername)
 
 			fmt.Print("Cronometer password (hidden): ")
 			pwBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
@@ -59,48 +84,87 @@ func newAuthCronometerCmd() *cobra.Command {
 			}
 			password := string(pwBytes)
 
-			ctx := context.Background()
-			if _, err := cronometer.NewClient().Login(ctx, username, password); err != nil {
+			if _, err := cronometer.NewClient().Login(ctx, cronoUsername, password); err != nil {
 				return fmt.Errorf("verifying credentials: %w", err)
 			}
 
-			creds := &cronometer.Credentials{Username: username, Password: password}
-			if err := cronometer.SaveCredentials(appPaths.CronometerCredentialsFile(), key, creds); err != nil {
+			if err := appPaths.EnsureUserDir(userID); err != nil {
+				return fmt.Errorf("creating per-user directories: %w", err)
+			}
+			creds := &cronometer.Credentials{Username: cronoUsername, Password: password}
+			credPath := appPaths.UserCronometerCredentialsFile(userID)
+			if err := cronometer.SaveCredentials(credPath, userKey, creds); err != nil {
 				return fmt.Errorf("saving credentials: %w", err)
 			}
 
-			fmt.Println("verified and saved — credentials written to", appPaths.CronometerCredentialsFile())
+			fmt.Println("verified and saved — credentials written to", credPath)
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVar(&username, "user", "", "healthd account username to attach these credentials to (required)")
+	return cmd
 }
 
 func newAuthGoogleCmd() *cobra.Command {
-	return &cobra.Command{
+	var username string
+
+	cmd := &cobra.Command{
 		Use:   "google",
 		Short: "Run the OAuth2 flow for Google Health API access",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+
 			cfg, err := config.Load(appPaths.ConfigFile())
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
 
-			key, err := crypto.LoadKey(appPaths.DBKeyFile())
+			dbKey, err := crypto.LoadKey(appPaths.DBKeyFile())
 			if err != nil {
 				return fmt.Errorf("loading key material (run \"healthd db init\" first?): %w", err)
 			}
+			store, err := db.Open(appPaths.DBFile(), appPaths.DBWorkingFile(), dbKey)
+			if err != nil {
+				return fmt.Errorf("opening database (run \"healthd db init\" first?): %w", err)
+			}
+			defer func() {
+				if cerr := store.Close(); cerr != nil {
+					fmt.Fprintln(os.Stderr, "warning: closing database:", cerr)
+				}
+			}()
 
-			token, err := googleauth.RunConsentFlow(context.Background(), cfg)
+			userID, err := resolveUserID(ctx, store.DB(), username)
+			if err != nil {
+				return err
+			}
+			userKey, err := webauth.CredentialKey(appPaths, userID)
+			if err != nil {
+				return fmt.Errorf("loading credential key for %q: %w", username, err)
+			}
+
+			clientJSON, err := googleauth.LoadClientJSON(appPaths.GoogleClientSecretFile(), dbKey)
+			if err != nil {
+				return err
+			}
+			token, err := googleauth.RunConsentFlow(ctx, clientJSON, cfg.Google.CallbackPort)
 			if err != nil {
 				return fmt.Errorf("running Google consent flow: %w", err)
 			}
 
-			if err := googleauth.SaveToken(appPaths.GoogleOAuthFile(), key, token); err != nil {
+			if err := appPaths.EnsureUserDir(userID); err != nil {
+				return fmt.Errorf("creating per-user directories: %w", err)
+			}
+			tokenPath := appPaths.UserGoogleOAuthFile(userID)
+			if err := googleauth.SaveToken(tokenPath, userKey, token); err != nil {
 				return fmt.Errorf("saving token: %w", err)
 			}
 
-			fmt.Println("authorized — tokens written to", appPaths.GoogleOAuthFile())
+			fmt.Println("authorized — tokens written to", tokenPath)
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVar(&username, "user", "", "healthd account username to attach this Google Health authorization to (required)")
+	return cmd
 }

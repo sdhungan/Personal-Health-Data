@@ -31,6 +31,7 @@ const dateLayout = "2006-01-02"
 type DBSyncer struct {
 	Client          *Client
 	DB              *sql.DB
+	UserID          int64
 	Key             crypto.Key
 	CredentialsPath string
 	SessionPath     string
@@ -44,8 +45,9 @@ type DBSyncer struct {
 // credentialsPath (see "healthd auth cronometer") and any cached session
 // from sessionPath, returning a DBSyncer ready for SyncDay. A missing or
 // unreadable cached session is not an error — SyncDay logs in fresh on
-// first use.
-func NewDBSyncer(db *sql.DB, key crypto.Key, credentialsPath, sessionPath string) (*DBSyncer, error) {
+// first use. userID scopes every row this syncer writes — one DBSyncer is
+// constructed per user per sync pass, never shared across users.
+func NewDBSyncer(db *sql.DB, userID int64, key crypto.Key, credentialsPath, sessionPath string) (*DBSyncer, error) {
 	creds, err := LoadCredentials(credentialsPath, key)
 	if err != nil {
 		return nil, fmt.Errorf("loading Cronometer credentials (run \"healthd auth cronometer\" first?): %w", err)
@@ -54,6 +56,7 @@ func NewDBSyncer(db *sql.DB, key crypto.Key, credentialsPath, sessionPath string
 	s := &DBSyncer{
 		Client:          NewClient(),
 		DB:              db,
+		UserID:          userID,
 		Key:             key,
 		CredentialsPath: credentialsPath,
 		SessionPath:     sessionPath,
@@ -101,18 +104,18 @@ func (s *DBSyncer) SyncDay(ctx context.Context, day time.Time) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("fetching foods for %s: %w", dayStr, err)
 		}
-		if err := upsertServings(ctx, s.DB, dayStr, servings, indexFoods(foods)); err != nil {
+		if err := upsertServings(ctx, s.DB, s.UserID, dayStr, servings, indexFoods(foods)); err != nil {
 			return false, fmt.Errorf("upserting servings for %s: %w", dayStr, err)
 		}
-	} else if err := deleteServingsForDay(ctx, s.DB, dayStr); err != nil {
+	} else if err := deleteServingsForDay(ctx, s.DB, s.UserID, dayStr); err != nil {
 		return false, fmt.Errorf("clearing servings for %s: %w", dayStr, err)
 	}
 
 	if len(exercises) > 0 {
-		if err := upsertExercises(ctx, s.DB, dayStr, exercises); err != nil {
+		if err := upsertExercises(ctx, s.DB, s.UserID, dayStr, exercises); err != nil {
 			return false, fmt.Errorf("upserting exercises for %s: %w", dayStr, err)
 		}
-	} else if err := deleteExercisesForDay(ctx, s.DB, dayStr); err != nil {
+	} else if err := deleteExercisesForDay(ctx, s.DB, s.UserID, dayStr); err != nil {
 		return false, fmt.Errorf("clearing exercises for %s: %w", dayStr, err)
 	}
 
@@ -121,10 +124,10 @@ func (s *DBSyncer) SyncDay(ctx context.Context, day time.Time) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("fetching metric catalog: %w", err)
 		}
-		if err := upsertBiometrics(ctx, s.DB, dayStr, biometrics, metrics); err != nil {
+		if err := upsertBiometrics(ctx, s.DB, s.UserID, dayStr, biometrics, metrics); err != nil {
 			return false, fmt.Errorf("upserting biometrics for %s: %w", dayStr, err)
 		}
-	} else if err := deleteBiometricsForDay(ctx, s.DB, dayStr); err != nil {
+	} else if err := deleteBiometricsForDay(ctx, s.DB, s.UserID, dayStr); err != nil {
 		return false, fmt.Errorf("clearing biometrics for %s: %w", dayStr, err)
 	}
 
@@ -136,7 +139,7 @@ func (s *DBSyncer) SyncDay(ctx context.Context, day time.Time) (bool, error) {
 	}
 	components := scores.AllTargetsComponents()
 	kcalBurned := diary.Summary.Burned.Total
-	if err := upsertDailyNutrition(ctx, s.DB, dayStr, diary.Info.Complete, kcalBurned, nutritionAmountsFromScores(components)); err != nil {
+	if err := upsertDailyNutrition(ctx, s.DB, s.UserID, dayStr, diary.Info.Complete, kcalBurned, nutritionAmountsFromScores(components)); err != nil {
 		return false, fmt.Errorf("upserting daily nutrition for %s: %w", dayStr, err)
 	}
 

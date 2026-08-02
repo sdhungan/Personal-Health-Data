@@ -20,7 +20,10 @@ func newTestSQLStore(t *testing.T) (*SQLStore, *sql.DB) {
 	if _, err := conn.Exec(dbpkg.Schema); err != nil {
 		t.Fatalf("applying schema: %v", err)
 	}
-	return &SQLStore{DB: conn}, conn
+	if _, err := conn.Exec(`INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'x')`); err != nil {
+		t.Fatalf("seeding test user: %v", err)
+	}
+	return &SQLStore{DB: conn, UserID: 1}, conn
 }
 
 func TestSQLStoreEnsurePendingIsIdempotent(t *testing.T) {

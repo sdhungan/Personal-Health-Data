@@ -61,7 +61,7 @@ func nutritionCoalesceSet(table string) string {
 // raw/override split — see cronometer-integration.md), so overwrite-on-fetch
 // via COALESCE(excluded.x, table.x) is correct, same pattern as
 // internal/googlehealth/sync_upsert.go's upsertDailySummary.
-func upsertDailyNutrition(ctx context.Context, db *sql.DB, day string, completed bool, kcalBurned float64, amounts *NutritionAmounts) error {
+func upsertDailyNutrition(ctx context.Context, db *sql.DB, userID int64, day string, completed bool, kcalBurned float64, amounts *NutritionAmounts) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 
 	completedInt := 0
@@ -74,16 +74,16 @@ func upsertDailyNutrition(ctx context.Context, db *sql.DB, day string, completed
 	}
 
 	query := fmt.Sprintf(`
-		INSERT INTO cronometer_daily_nutrition (day, completed, kcal_burned_cronometer, %s, synced_at)
-		VALUES (?, ?, ?, %s, ?)
-		ON CONFLICT(day) DO UPDATE SET
+		INSERT INTO cronometer_daily_nutrition (user_id, day, completed, kcal_burned_cronometer, %s, synced_at)
+		VALUES (?, ?, ?, ?, %s, ?)
+		ON CONFLICT(user_id, day) DO UPDATE SET
 			completed = excluded.completed,
 			kcal_burned_cronometer = COALESCE(excluded.kcal_burned_cronometer, cronometer_daily_nutrition.kcal_burned_cronometer),
 			%s,
 			synced_at = excluded.synced_at
 	`, strings.Join(nutritionColumns, ", "), nutritionPlaceholders(), nutritionCoalesceSet("cronometer_daily_nutrition"))
 
-	args := []any{day, completedInt, kcalBurnedArg}
+	args := []any{userID, day, completedInt, kcalBurnedArg}
 	args = append(args, amounts.values()...)
 	args = append(args, now)
 
@@ -108,20 +108,20 @@ func recordedTimeOf(day, timeStr string) string {
 // then insert) — servings have no natural external key to upsert against,
 // and sync is the sole writer, so a full day's replacement on every fetch
 // is correct and simpler than tracking Cronometer's own servingId.
-func upsertServings(ctx context.Context, db *sql.DB, day string, entries []DiaryEntry, foodByID map[int64]Food) error {
+func upsertServings(ctx context.Context, db *sql.DB, userID int64, day string, entries []DiaryEntry, foodByID map[int64]Food) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM cronometer_serving WHERE day = ?`, day); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM cronometer_serving WHERE user_id = ? AND day = ?`, userID, day); err != nil {
 		return fmt.Errorf("clearing existing servings for %s: %w", day, err)
 	}
 
 	query := fmt.Sprintf(`
-		INSERT INTO cronometer_serving (day, recorded_time, food_name, category, quantity_value, quantity_units, %s)
-		VALUES (?, ?, ?, ?, ?, ?, %s)
+		INSERT INTO cronometer_serving (user_id, day, recorded_time, food_name, category, quantity_value, quantity_units, %s)
+		VALUES (?, ?, ?, ?, ?, ?, ?, %s)
 	`, strings.Join(nutritionColumns, ", "), nutritionPlaceholders())
 
 	for _, e := range entries {
@@ -146,7 +146,7 @@ func upsertServings(ctx context.Context, db *sql.DB, day string, entries []Diary
 		// category: Cronometer's food.Category is a numeric ID (confirmed
 		// 2026-07-31 dump) with no confirmed name catalog captured yet —
 		// left NULL rather than storing a meaningless number.
-		args := []any{day, recordedTimeOf(day, e.Time), name, nil, quantityValue, quantityUnits}
+		args := []any{userID, day, recordedTimeOf(day, e.Time), name, nil, quantityValue, quantityUnits}
 		args = append(args, amounts.values()...)
 		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 			return fmt.Errorf("inserting serving (food_id=%d) for %s: %w", e.FoodID, day, err)
@@ -156,8 +156,8 @@ func upsertServings(ctx context.Context, db *sql.DB, day string, entries []Diary
 	return tx.Commit()
 }
 
-func deleteServingsForDay(ctx context.Context, db *sql.DB, day string) error {
-	_, err := db.ExecContext(ctx, `DELETE FROM cronometer_serving WHERE day = ?`, day)
+func deleteServingsForDay(ctx context.Context, db *sql.DB, userID int64, day string) error {
+	_, err := db.ExecContext(ctx, `DELETE FROM cronometer_serving WHERE user_id = ? AND day = ?`, userID, day)
 	return err
 }
 
@@ -168,14 +168,14 @@ func deleteServingsForDay(ctx context.Context, db *sql.DB, day string) error {
 // hand-logged entry's real field shape, including whether it carries any
 // group/category field at all, is INFERRED from Serving's shape, not
 // confirmed.
-func upsertExercises(ctx context.Context, db *sql.DB, day string, entries []DiaryEntry) error {
+func upsertExercises(ctx context.Context, db *sql.DB, userID int64, day string, entries []DiaryEntry) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM cronometer_exercise WHERE day = ?`, day); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM cronometer_exercise WHERE user_id = ? AND day = ?`, userID, day); err != nil {
 		return fmt.Errorf("clearing existing exercises for %s: %w", day, err)
 	}
 
@@ -184,9 +184,9 @@ func upsertExercises(ctx context.Context, db *sql.DB, day string, entries []Diar
 		// budget deduction, not a signed quantity; store the magnitude.
 		calories := math.Abs(e.Calories)
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO cronometer_exercise (day, recorded_time, exercise_name, minutes, calories_burned)
-			VALUES (?, ?, ?, ?, ?)
-		`, day, recordedTimeOf(day, e.Time), e.Name, nullIfZero(e.Minutes), nullIfZero(calories)); err != nil {
+			INSERT INTO cronometer_exercise (user_id, day, recorded_time, exercise_name, minutes, calories_burned)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`, userID, day, recordedTimeOf(day, e.Time), e.Name, nullIfZero(e.Minutes), nullIfZero(calories)); err != nil {
 			return fmt.Errorf("inserting exercise (id=%d) for %s: %w", e.ExerciseID, day, err)
 		}
 	}
@@ -194,8 +194,8 @@ func upsertExercises(ctx context.Context, db *sql.DB, day string, entries []Diar
 	return tx.Commit()
 }
 
-func deleteExercisesForDay(ctx context.Context, db *sql.DB, day string) error {
-	_, err := db.ExecContext(ctx, `DELETE FROM cronometer_exercise WHERE day = ?`, day)
+func deleteExercisesForDay(ctx context.Context, db *sql.DB, userID int64, day string) error {
+	_, err := db.ExecContext(ctx, `DELETE FROM cronometer_exercise WHERE user_id = ? AND day = ?`, userID, day)
 	return err
 }
 
@@ -203,14 +203,14 @@ func deleteExercisesForDay(ctx context.Context, db *sql.DB, day string) error {
 // insert, same reasoning as upsertServings). metrics resolves each entry's
 // numeric metricId/unitId to the human-readable names schema.sql's
 // metric/unit TEXT columns want.
-func upsertBiometrics(ctx context.Context, db *sql.DB, day string, entries []DiaryEntry, metrics []Metric) error {
+func upsertBiometrics(ctx context.Context, db *sql.DB, userID int64, day string, entries []DiaryEntry, metrics []Metric) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM cronometer_biometric WHERE day = ?`, day); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM cronometer_biometric WHERE user_id = ? AND day = ?`, userID, day); err != nil {
 		return fmt.Errorf("clearing existing biometrics for %s: %w", day, err)
 	}
 
@@ -230,9 +230,9 @@ func upsertBiometrics(ctx context.Context, db *sql.DB, day string, entries []Dia
 		}
 
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO cronometer_biometric (day, recorded_time, metric, unit, amount)
-			VALUES (?, ?, ?, ?, ?)
-		`, day, recordedTimeOf(day, e.Time), metricName, unitName, e.Amount); err != nil {
+			INSERT INTO cronometer_biometric (user_id, day, recorded_time, metric, unit, amount)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`, userID, day, recordedTimeOf(day, e.Time), metricName, unitName, e.Amount); err != nil {
 			return fmt.Errorf("inserting biometric (id=%d) for %s: %w", e.BiometricID, day, err)
 		}
 	}
@@ -240,8 +240,8 @@ func upsertBiometrics(ctx context.Context, db *sql.DB, day string, entries []Dia
 	return tx.Commit()
 }
 
-func deleteBiometricsForDay(ctx context.Context, db *sql.DB, day string) error {
-	_, err := db.ExecContext(ctx, `DELETE FROM cronometer_biometric WHERE day = ?`, day)
+func deleteBiometricsForDay(ctx context.Context, db *sql.DB, userID int64, day string) error {
+	_, err := db.ExecContext(ctx, `DELETE FROM cronometer_biometric WHERE user_id = ? AND day = ?`, userID, day)
 	return err
 }
 

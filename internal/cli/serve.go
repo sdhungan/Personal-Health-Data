@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,7 +12,6 @@ import (
 	"github.com/sdhungan/Personal-Health-Data/internal/config"
 	"github.com/sdhungan/Personal-Health-Data/internal/crypto"
 	"github.com/sdhungan/Personal-Health-Data/internal/db"
-	"github.com/sdhungan/Personal-Health-Data/internal/googleauth"
 	"github.com/sdhungan/Personal-Health-Data/internal/web"
 )
 
@@ -78,18 +76,12 @@ func runServeForeground() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// The dashboard's force-sync button needs an authenticated Google
-	// Health client too, but a missing/broken Google auth setup shouldn't
-	// stop the whole dashboard from starting — the button just reports a
-	// clear error in that case (see web.Server's googleSync nil check).
-	var googleClient *http.Client
-	if gc, gcErr := googleauth.HTTPClient(ctx, appPaths.GoogleOAuthFile(), key, cfg); gcErr != nil {
-		fmt.Fprintln(os.Stderr, "warning: Google Health client unavailable (force-sync will be disabled):", gcErr)
-	} else {
-		googleClient = gc
-	}
-
-	srv := web.New(store, googleClient, key, appPaths.CronometerCredentialsFile(), appPaths.CronometerSessionFile())
+	// Every user's Google/Cronometer client is resolved lazily, per user,
+	// from their own per-user credential files (see web.Server's
+	// googleSyncers/cronoSyncers cache) — nothing to pre-load here. key is
+	// also handed to the server as its RootKey, to decrypt the one
+	// app-wide Google OAuth client JSON uploaded via /settings/google-client.
+	srv := web.New(store, appPaths, cfg, key)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	fmt.Println("web dashboard listening on http://localhost" + addr)

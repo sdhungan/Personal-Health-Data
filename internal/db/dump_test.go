@@ -23,17 +23,22 @@ func TestDumpRoundTripsThroughFreshDatabase(t *testing.T) {
 	}
 
 	if _, err := store.DB().Exec(
-		`INSERT INTO user_profile (id, sex, birth_date) VALUES (1, 'male', '1990-05-17')`,
+		`INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'x')`,
+	); err != nil {
+		t.Fatalf("insert users: %v", err)
+	}
+	if _, err := store.DB().Exec(
+		`INSERT INTO user_profile (user_id, sex, birth_date) VALUES (1, 'male', '1990-05-17')`,
 	); err != nil {
 		t.Fatalf("insert user_profile: %v", err)
 	}
 	if _, err := store.DB().Exec(
-		`INSERT INTO body_measurement (day, weight_kg_raw, waist_cm, neck_cm) VALUES ('2026-07-30', 79.4, 84.0, NULL)`,
+		`INSERT INTO body_measurement (user_id, day, weight_kg_raw, waist_cm, neck_cm) VALUES (1, '2026-07-30', 79.4, 84.0, NULL)`,
 	); err != nil {
 		t.Fatalf("insert body_measurement: %v", err)
 	}
 	if _, err := store.DB().Exec(
-		`INSERT INTO daily_tag (day, tag) VALUES ('2026-07-30', 'travel')`,
+		`INSERT INTO daily_tag (user_id, day, tag) VALUES (1, '2026-07-30', 'travel')`,
 	); err != nil {
 		t.Fatalf("insert daily_tag: %v", err)
 	}
@@ -57,7 +62,7 @@ func TestDumpRoundTripsThroughFreshDatabase(t *testing.T) {
 	}
 
 	var sex, birthDate string
-	if err := fresh.QueryRow(`SELECT sex, birth_date FROM user_profile WHERE id = 1`).Scan(&sex, &birthDate); err != nil {
+	if err := fresh.QueryRow(`SELECT sex, birth_date FROM user_profile WHERE user_id = 1`).Scan(&sex, &birthDate); err != nil {
 		t.Fatalf("querying restored user_profile: %v", err)
 	}
 	if sex != "male" || birthDate != "1990-05-17" {
@@ -102,7 +107,10 @@ func TestDiscardDoesNotCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if _, err := store.DB().Exec(`INSERT INTO user_profile (id, sex) VALUES (1, 'male')`); err != nil {
+	if _, err := store.DB().Exec(
+		`INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'x');
+		 INSERT INTO user_profile (user_id, sex) VALUES (1, 'male')`,
+	); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 	if err := store.Discard(); err != nil {

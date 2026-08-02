@@ -1,13 +1,29 @@
 # Prerequisite knowledge for working on this repo
 
 Findings accumulated across working sessions on this project (started
-2026-07-31, most recently updated 2026-08-01), so a future agent/session
+2026-07-31, most recently updated 2026-08-02), so a future agent/session
 doesn't have to re-derive them. Read `ARCHITECTURE.md` first — this doc is
 the practical addendum: environment gotchas, where the real dev data lives,
 and specific issues already found (some fixed, some deliberately left
 alone). If the task at hand is specifically about Cronometer, read
 `cronometer-integration.md` instead/first — it now describes the finished
 integration (client, auth, sync, UI, known gaps), not a handoff/TODO list.
+
+**2026-08-02: work moved to a Mac.** Everything under "Environment gotchas
+on this machine" below (the `C:\Users\meror\...` paths, PowerShell/`csc.exe`
+SQLite workaround, etc.) describes the *original Windows* machine this
+project started on — it's kept for whoever's back on that machine, but does
+not apply here. The Makefile is OS-aware now (see its own `ifeq
+($(OS),Windows_NT)` block) and was fixed this session for a genuine cross-
+platform gotcha worth recording: **the macOS-bundled GNU Make (3.81, Apple's
+last-GPLv2 build, frozen since ~2006) mis-parses a TAB-indented line inside
+an `ifeq`/`else` conditional block when a `.PHONY:` line appears earlier in
+the file** — it silently swallows the variable assignment instead of erroring,
+so `$(BINARY)` resolved to empty and the build command ran against no output
+path at all, no error printed. Fix: indent conditional bodies in the
+Makefile with spaces, never tabs (tabs are only meaningful for recipe
+lines). If a `make` target on macOS is silently doing the wrong thing with
+no error, check for this before assuming the code itself is broken.
 
 ## Environment gotchas on this machine
 
@@ -28,33 +44,26 @@ integration (client, auth, sync, UI, known gaps), not a handoff/TODO list.
   ABI as upstream `sqlite3.dll`/the amalgamation, since it's a
   SQLitePCLRaw-bundled build). Useful fallback if Go is ever unavailable
   again and you need to read a `.db`/working file directly.
-- **Never seed, wipe, or `db init` `bin/explore-root` for testing — ever.**
-  It's the user's real, actually-configured `--root`, not a throwaway
-  fixture: real Google Health/Cronometer syncs land in it independently of
-  whatever session is running (confirmed the hard way — a repeated
-  wipe/seed/verify/wipe test cycle against it during one session
-  discovered a genuinely real, independently-timestamped nutrition sync
-  row mixed into the "clean" test data afterward, meaning real data had
-  likely been getting swept into `old-schema-backup-*` folders and
-  discarded across several earlier "clean" cycles without being caught
-  each time). For any live-verification need, create and use an isolated
-  scratch root instead — e.g. `healthd db init --root <scratchpad-path>`
-  with a throwaway `HEALTHD_DB_PASSPHRASE` — and never touch
-  `bin/explore-root` unless the task itself is explicitly about
-  `bin/explore-root` (the user directly asking to reinitialize or inspect
-  it is a deliberate action, not test churn). Separately, never query
-  `bin/explore-root/db/.health.db.work` (or its `-wal`/`-shm`) directly
-  even for a real, requested action — `internal/db.Store` assumes exclusive
-  ownership of that file, so check `Get-Process healthd` first and stop the
-  process (or copy the file aside) before touching it.
-- **`go build ./...` does NOT rebuild `bin/healthd.exe`.** It only
+- **The `bin/explore-root` warning from the original Windows sessions does
+  not apply here.** That was a real, actually-configured `--root` on the
+  *other* machine with real synced data in it. This Mac's `bin/` is
+  gitignored and this was the first working session on this machine — there
+  is no real persisted data anywhere on it. As of 2026-08-02 the database is
+  under active multi-user refactoring (see "Multi-user accounts" below):
+  treat any scratch root under `bin/` on this machine as fully disposable —
+  freely `rm -rf` and re-`db init` it between changes, no need to preserve
+  anything. If real data ever does accumulate on this machine (a real
+  account synced against a real Google/Cronometer login), revisit this note
+  before treating scratch roots as disposable again.
+- **`go build ./...` does NOT rebuild the `healthd` binary.** It only
   typechecks/compiles every package to verify correctness — it produces no
   output file. If you edit code, run `templ generate` (if `.templ` files
-  changed) and then explicitly `go build -o bin/healthd.exe ./cmd/healthd`
-  (or `make build`) before restarting the server to test the change, every
-  time — running the old binary after "successfully" building looks
-  identical (no error) but silently serves stale behavior. Bit this exact
-  project more than once already.
+  changed) and then explicitly `go build -o bin/healthd ./cmd/healthd`
+  (or `make build`, which now picks `bin/healthd.exe` vs `bin/healthd`
+  automatically depending on host OS) before restarting the server to test
+  the change, every time — running the old binary after "successfully"
+  building looks identical (no error) but silently serves stale behavior.
+  Bit this exact project more than once already.
 - `bin/` (and therefore `bin/explore-root/`) is gitignored — nothing under it
   is tracked, so it's safe to treat as disposable/local, but it's also the
   only place real-shaped data exists to test against. `bin/google-health-dump/`
@@ -122,7 +131,9 @@ for a nested (non-root) `data-signals`, so don't assume they do.
   fetchable. `internal/db/migrations.go`'s mechanism exists but is
   currently **empty** (see that file's own comment) — this rewrite went
   straight into `schema.sql` rather than a migration, since there was no
-  real deployed data to preserve at the time. Point for future
+  real deployed data to preserve at the time. The 2026-08-02 multi-user
+  rewrite (see "Multi-user accounts" below) used the same
+  no-real-data-yet/no-migration precedent a second time. Point for future
   schema-touching work: confirm with the user whether the *next* change
   needs a real migration (once there's real data on disk worth preserving)
   rather than assuming another wholesale rewrite is fine.
@@ -163,6 +174,63 @@ for a nested (non-root) `data-signals`, so don't assume they do.
   the top and will be silently overwritten. And remember `templ generate`
   alone doesn't rebuild the binary either — see the `go build ./...` gotcha
   above.
+
+## Multi-user accounts (2026-08-02)
+
+`healthd` went from single-tenant (one implicit owner, no login) to a real
+multi-account system in this session — see `ARCHITECTURE.md` for the design
+writeup. The load-bearing points a future change needs to keep straight:
+
+- **Sync is deliberately decoupled from login.** The background scheduler
+  (`internal/cli/service.go`'s `runForeground`, and `healthd sync`) fans out
+  one short-lived goroutine per user per source per run, driven purely by
+  whether that user has a saved provider credential file on disk — not by
+  whether anyone is logged into the dashboard. Never make the scheduler
+  check `web_session` or gate on an active session; that would break the
+  "runs unattended" model the whole app is built around.
+- **Two independent encryption layers, same primitive.** The root
+  `keys/db.key` (Argon2id-derived from the `db init` passphrase) still
+  encrypts the whole SQLite file, unchanged. Each user *additionally* gets
+  their own `keys/users/<id>.key`, derived the same way
+  (`internal/crypto.GenerateAndSaveKey`/`LoadKey`, unchanged) but from that
+  user's own account password — used only to encrypt that user's Google
+  OAuth token / Cronometer credentials under `config/users/<id>/`. Both
+  keys are cached to disk (not memory-only) for the same reason the
+  original DB key is: unattended sync needs to read them without a human
+  re-entering a password. This is the same trust boundary the DB key
+  already had, not a stronger one — see `internal/webauth/users.go`'s
+  `CreateUser` doc comment.
+- **Every data table is scoped by `user_id`**, folded into its primary key
+  (see `schema.sql`'s own header comment and its multi-user note). Any new
+  query against `watch_*`/`cronometer_*`/`body_measurement`/
+  `daily_journal`/`daily_tag`/`sync_state` needs a `user_id = ?` filter
+  bound from `webauth.CurrentUserID(c)` (web) or the sync job's own
+  per-user loop variable (scheduler) — never from a request/query
+  parameter, and never omitted. `internal/web`'s query functions all take
+  `userID int64` as an explicit parameter for exactly this reason.
+- **Login sessions are separate from provider credentials.** `web_session`
+  (dashboard login, 24h sliding inactivity window, cookie holds the raw
+  token, only its SHA-256 is stored) has nothing to do with
+  `keys/users/<id>.key` (provider credential encryption). Losing/expiring a
+  session never affects sync; disconnecting a provider never affects
+  login.
+- CLI provider-auth commands (`healthd auth google`/`cronometer`) now
+  require `--user <username>` — an account must already exist (via the
+  dashboard's `/signup` or `healthd user create <username>`) before either
+  command has anywhere to attach credentials to.
+- `bin/seed/main.go` (throwaway dev seeder, not part of the product) now
+  creates/reuses a named user (`-user`/`-password` flags, default
+  `demo`/`demopassword`) and seeds all rows under that user's id.
+- **The Google OAuth *client* JSON is a third, separate secret from
+  everything above** (added 2026-08-02) — not per-user, not per-session:
+  one Google Cloud OAuth client serves every account's own Google login.
+  It's uploaded via `/settings/google-client` (or `healthd google-client
+  set <path>`), validated, and encrypted with the *root* DB key
+  (`config/google_oauth_client.json.enc` — see
+  `internal/googleauth.SaveClientJSON`), never a per-user key. config.yaml
+  no longer has a `google.credentials_file` field at all. Don't confuse
+  this with a user's own OAuth *token* (`config/users/<id>/
+  google_oauth.json.enc`, per-user key) — see `ARCHITECTURE.md` §5.
 
 ## What's built as of 2026-08-01
 
@@ -225,21 +293,25 @@ make test / make vet # go test ./... / go vet ./...
 
 `go build ./...` (no `-o`) is NOT a substitute for `make build` — see the
 environment gotcha above, it typechecks but produces no binary. To actually
-exercise a change: `templ generate` → `go build -o bin/healthd.exe
-./cmd/healthd` → restart whatever's running that binary.
+exercise a change: `templ generate` → `go build -o bin/healthd ./cmd/healthd`
+(or `bin/healthd.exe` on Windows) → restart whatever's running that binary.
 
-For live UI verification, create an isolated scratch root — never
-`bin/explore-root`, see the environment gotcha above:
+For live UI verification, create an isolated scratch root (any root under
+`bin/` on this machine is freely disposable, see above):
 
 ```bash
-HEALTHD_DB_PASSPHRASE=throwaway ./bin/healthd.exe --root <scratch-path> db init
-./bin/healthd.exe --root <scratch-path> serve
+rm -rf bin/dev-root
+HEALTHD_DB_PASSPHRASE=throwaway ./bin/healthd --root bin/dev-root db init
+go run ./bin/seed --root bin/dev-root        # dummy 7-day data for a "demo" user
+./bin/healthd --root bin/dev-root serve
 ```
 
 `healthd serve` (see `ARCHITECTURE.md` §2) only runs the web dashboard, not
-the sync scheduler — the dashboard's Sync button, `healthd sync`, or a
-small one-off Go program using `internal/db.Open` directly (see any of this
-project's `cmd/`-style throwaway scripts) are the ways to get real-shaped
-data into a scratch root without needing real Google/Cronometer
-credentials. Default port is `8080` (`config.yaml`'s `port` key, under
-whatever root you point `--root` at).
+the sync scheduler — the dashboard's Sync button, `healthd sync`, or
+`bin/seed` (see "Multi-user accounts" above) are the ways to get
+real-shaped data into a scratch root without needing real Google/Cronometer
+credentials. Visiting `/` with no session redirects to `/login`; use
+`/signup` to create the first account (lands on `/onboarding/connect`
+afterward, or "Continue to Dashboard" to skip both providers for now).
+Default port is `8080` (`config.yaml`'s `port` key, under whatever root you
+point `--root` at).

@@ -25,11 +25,11 @@ templ CronometerAccountCard(connected bool, message string) {
 				<div class="body-form">
 					<div class="body-field">
 						<label for="crono-email">Email</label>
-						<input id="crono-email" type="email" autocomplete="username" data-bind:cronousername/>
+						<input id="crono-email" type="email" autocomplete="off" data-bind:cronousername/>
 					</div>
 					<div class="body-field">
 						<label for="crono-password">Password</label>
-						<input id="crono-password" type="password" autocomplete="current-password" data-bind:cronopassword/>
+						<input id="crono-password" type="password" autocomplete="off" data-bind:cronopassword/>
 					</div>
 					<div class="body-form-footer">
 						<button class="body-carry-btn" data-on:click={ postExpr(cronometerLoginURL()) }>

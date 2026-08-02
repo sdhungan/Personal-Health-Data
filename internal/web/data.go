@@ -65,16 +65,18 @@ func scanDailySummaryRow(row *healthdata.DailySummary) []any {
 // none yet — every field nil, tiles render their "no data" state for
 // that) plus cronometer_daily_nutrition's macros, merged onto the same
 // struct since a day can have nutrition data with no watch_daily_summary
-// row at all (food logged, watch never synced).
-func fetchDailySummaryRow(ctx context.Context, db *sql.DB, day string) (dashboardDailyRow, error) {
+// row at all (food logged, watch never synced). userID is always the
+// authenticated caller's own id (see webauth.CurrentUserID) — never a
+// request parameter — so this can never read another user's row.
+func fetchDailySummaryRow(ctx context.Context, db *sql.DB, userID int64, day string) (dashboardDailyRow, error) {
 	r := dashboardDailyRow{DailySummary: healthdata.DailySummary{Day: day}}
-	err := db.QueryRowContext(ctx, `SELECT `+dailySummaryColumns+` FROM watch_daily_summary WHERE day = ?`, day).
+	err := db.QueryRowContext(ctx, `SELECT `+dailySummaryColumns+` FROM watch_daily_summary WHERE user_id = ? AND day = ?`, userID, day).
 		Scan(scanDailySummaryRow(&r.DailySummary)...)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return r, fmt.Errorf("querying watch_daily_summary for %s: %w", day, err)
 	}
 
-	err = db.QueryRowContext(ctx, `SELECT energy_kcal, kcal_burned_cronometer, protein_g, carbs_g, fat_g FROM cronometer_daily_nutrition WHERE day = ?`, day).
+	err = db.QueryRowContext(ctx, `SELECT energy_kcal, kcal_burned_cronometer, protein_g, carbs_g, fat_g FROM cronometer_daily_nutrition WHERE user_id = ? AND day = ?`, userID, day).
 		Scan(&r.NutritionEnergyKcal, &r.NutritionKcalBurned, &r.NutritionProteinG, &r.NutritionCarbsG, &r.NutritionFatG)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return r, fmt.Errorf("querying cronometer_daily_nutrition for %s: %w", day, err)
@@ -84,11 +86,11 @@ func fetchDailySummaryRow(ctx context.Context, db *sql.DB, day string) (dashboar
 
 // fetch7DayRows returns a day->row map for the 7 days ending on endDay
 // (inclusive), missing days simply absent from the map.
-func fetch7DayRows(ctx context.Context, db *sql.DB, endDay time.Time) (map[string]dashboardDailyRow, error) {
+func fetch7DayRows(ctx context.Context, db *sql.DB, userID int64, endDay time.Time) (map[string]dashboardDailyRow, error) {
 	start := endDay.AddDate(0, 0, -6).Format(dateLayout)
 	end := endDay.Format(dateLayout)
 
-	rows, err := db.QueryContext(ctx, `SELECT day, `+dailySummaryColumns+` FROM watch_daily_summary WHERE day BETWEEN ? AND ?`, start, end)
+	rows, err := db.QueryContext(ctx, `SELECT day, `+dailySummaryColumns+` FROM watch_daily_summary WHERE user_id = ? AND day BETWEEN ? AND ?`, userID, start, end)
 	if err != nil {
 		return nil, fmt.Errorf("querying 7-day watch_daily_summary range: %w", err)
 	}
@@ -112,7 +114,7 @@ func fetch7DayRows(ctx context.Context, db *sql.DB, endDay time.Time) (map[strin
 	// Merged in by day key, not a JOIN — a day can have nutrition data with
 	// no watch_daily_summary row at all (food logged, watch never synced),
 	// and this must not silently drop that day.
-	nutRows, err := db.QueryContext(ctx, `SELECT day, energy_kcal, kcal_burned_cronometer, protein_g, carbs_g, fat_g FROM cronometer_daily_nutrition WHERE day BETWEEN ? AND ?`, start, end)
+	nutRows, err := db.QueryContext(ctx, `SELECT day, energy_kcal, kcal_burned_cronometer, protein_g, carbs_g, fat_g FROM cronometer_daily_nutrition WHERE user_id = ? AND day BETWEEN ? AND ?`, userID, start, end)
 	if err != nil {
 		return nil, fmt.Errorf("querying 7-day cronometer_daily_nutrition range: %w", err)
 	}
@@ -332,7 +334,7 @@ var DefaultTileKinds = []string{
 // another daily-average chart — everything else falls back to the 7-day
 // trend, since there's genuinely nothing finer stored for it (see
 // prerequisite.md).
-func buildStatTile(ctx context.Context, db *sql.DB, t views.TileData, kind string, day time.Time, expanded bool, today dashboardDailyRow, history map[string]dashboardDailyRow) (views.TileData, error) {
+func buildStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, kind string, day time.Time, expanded bool, today dashboardDailyRow, history map[string]dashboardDailyRow) (views.TileData, error) {
 	def := metricDefs[kind]
 	t.Kind = views.TileKindStat
 	if kind == "sleep" {
@@ -369,7 +371,7 @@ func buildStatTile(ctx context.Context, db *sql.DB, t views.TileData, kind strin
 
 	switch kind {
 	case "steps":
-		hourly, err := fetchStepsHourly(ctx, db, day)
+		hourly, err := fetchStepsHourly(ctx, db, userID, day)
 		if err != nil {
 			return t, err
 		}
@@ -381,7 +383,7 @@ func buildStatTile(ctx context.Context, db *sql.DB, t views.TileData, kind strin
 			t.EmptyMsg = "No hourly step data for this day"
 		}
 	case "heart_rate":
-		detail, err := fetchHeartRateDetail(ctx, db, day, today)
+		detail, err := fetchHeartRateDetail(ctx, db, userID, day, today)
 		if err != nil {
 			return t, err
 		}
@@ -390,7 +392,7 @@ func buildStatTile(ctx context.Context, db *sql.DB, t views.TileData, kind strin
 			t.Empty = false
 		}
 	case "sleep":
-		detail, err := fetchSleepDetail(ctx, db, day)
+		detail, err := fetchSleepDetail(ctx, db, userID, day)
 		if err != nil {
 			return t, err
 		}
@@ -422,9 +424,9 @@ func localDayRangeUTC(day time.Time) (startUTC, endUTC string) {
 
 // fetchStepsHourly returns steps bucketed by local hour (0-23) for day, from
 // watch_steps_hourly.
-func fetchStepsHourly(ctx context.Context, db *sql.DB, day time.Time) ([24]int64, error) {
+func fetchStepsHourly(ctx context.Context, db *sql.DB, userID int64, day time.Time) ([24]int64, error) {
 	var hours [24]int64
-	rows, err := db.QueryContext(ctx, `SELECT hour, steps FROM watch_steps_hourly WHERE day = ?`, day.Format(dateLayout))
+	rows, err := db.QueryContext(ctx, `SELECT hour, steps FROM watch_steps_hourly WHERE user_id = ? AND day = ?`, userID, day.Format(dateLayout))
 	if err != nil {
 		return hours, fmt.Errorf("querying watch_steps_hourly for %s: %w", day.Format(dateLayout), err)
 	}
@@ -479,12 +481,12 @@ func hourLabel(h int) string {
 // comment), a day outside that window legitimately has zero rows even
 // though the daily average is still known — that's reported as a distinct,
 // clearly labeled message rather than silently showing nothing.
-func fetchHeartRateDetail(ctx context.Context, db *sql.DB, day time.Time, today dashboardDailyRow) (*views.DetailData, error) {
+func fetchHeartRateDetail(ctx context.Context, db *sql.DB, userID int64, day time.Time, today dashboardDailyRow) (*views.DetailData, error) {
 	startUTC, endUTC := localDayRangeUTC(day)
 	rows, err := db.QueryContext(ctx, `
 		SELECT recorded_at, bpm FROM watch_heart_rate_intraday
-		WHERE recorded_at >= ? AND recorded_at < ? ORDER BY recorded_at
-	`, startUTC, endUTC)
+		WHERE user_id = ? AND recorded_at >= ? AND recorded_at < ? ORDER BY recorded_at
+	`, userID, startUTC, endUTC)
 	if err != nil {
 		return nil, fmt.Errorf("querying intraday heart rate for %s: %w", day.Format(dateLayout), err)
 	}
@@ -540,8 +542,12 @@ func fetchHeartRateDetail(ctx context.Context, db *sql.DB, day time.Time, today 
 // summed for the collapsed BigValue and shown as a proportional segmented
 // bar (same renderer sleep stages use) when expanded. Heart-rate zones,
 // active-minutes-by-level, and active-zone-minutes-by-zone all share this
-// one function instead of three near-identical copies.
-func buildCategoryTile(ctx context.Context, db *sql.DB, t views.TileData, day time.Time, expanded bool, table, categoryColumn, valueColumn, title, icon, category, unit, emptyMsg string, humanize func(string) string) (views.TileData, error) {
+// one function instead of three near-identical copies. table/categoryColumn/
+// valueColumn are always hardcoded string literals supplied by the internal
+// callers below, never request input — see this project's SQL injection
+// audit — so building the SELECT with fmt.Sprintf here carries no risk;
+// userID/dayStr still bind as normal ? parameters.
+func buildCategoryTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, day time.Time, expanded bool, table, categoryColumn, valueColumn, title, icon, category, unit, emptyMsg string, humanize func(string) string) (views.TileData, error) {
 	t.Kind = views.TileKindStat
 	t.Title = title
 	t.Icon = icon
@@ -549,8 +555,8 @@ func buildCategoryTile(ctx context.Context, db *sql.DB, t views.TileData, day ti
 	t.Unit = unit
 
 	dayStr := day.Format(dateLayout)
-	query := fmt.Sprintf(`SELECT %s, %s FROM %s WHERE day = ? ORDER BY %s DESC`, categoryColumn, valueColumn, table, valueColumn)
-	rows, err := db.QueryContext(ctx, query, dayStr)
+	query := fmt.Sprintf(`SELECT %s, %s FROM %s WHERE user_id = ? AND day = ? ORDER BY %s DESC`, categoryColumn, valueColumn, table, valueColumn)
+	rows, err := db.QueryContext(ctx, query, userID, dayStr)
 	if err != nil {
 		return t, fmt.Errorf("querying %s for %s: %w", table, dayStr, err)
 	}
@@ -599,8 +605,8 @@ func buildCategoryTile(ctx context.Context, db *sql.DB, t views.TileData, day ti
 
 // buildHeartRateZonesTile builds the "Time in Zones" tile from
 // watch_heart_rate_zone_minutes.
-func buildHeartRateZonesTile(ctx context.Context, db *sql.DB, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
-	return buildCategoryTile(ctx, db, t, day, expanded,
+func buildHeartRateZonesTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
+	return buildCategoryTile(ctx, db, userID, t, day, expanded,
 		"watch_heart_rate_zone_minutes", "zone_type", "minutes",
 		"Time in Zones", "heart", "heart", "min", "No time-in-zone data", humanizeZoneType)
 }
@@ -608,8 +614,8 @@ func buildHeartRateZonesTile(ctx context.Context, db *sql.DB, t views.TileData, 
 // buildActiveMinutesByLevelTile builds the active-minutes-by-activity-level
 // breakdown tile from watch_active_minutes_by_level — the light/moderate/
 // vigorous split behind the flat "Active minutes" total tile.
-func buildActiveMinutesByLevelTile(ctx context.Context, db *sql.DB, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
-	return buildCategoryTile(ctx, db, t, day, expanded,
+func buildActiveMinutesByLevelTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
+	return buildCategoryTile(ctx, db, userID, t, day, expanded,
 		"watch_active_minutes_by_level", "activity_level", "minutes",
 		"Active Minutes by Level", "bolt", "activity", "min", "No active minutes recorded", humanizeZoneType)
 }
@@ -618,8 +624,8 @@ func buildActiveMinutesByLevelTile(ctx context.Context, db *sql.DB, t views.Tile
 // tile from watch_active_zone_minutes_by_zone — this metric has no flat
 // total column (unlike active-minutes), the category breakdown is its only
 // representation (see internal/db/schema.sql).
-func buildActiveZoneMinutesByZoneTile(ctx context.Context, db *sql.DB, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
-	return buildCategoryTile(ctx, db, t, day, expanded,
+func buildActiveZoneMinutesByZoneTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
+	return buildCategoryTile(ctx, db, userID, t, day, expanded,
 		"watch_active_zone_minutes_by_zone", "zone_type", "minutes",
 		"Active Zone Minutes", "heart", "heart", "min", "No active zone minutes data", humanizeZoneType)
 }
@@ -646,7 +652,7 @@ func humanizeZoneType(zone string) string {
 // renderer. Collapsed BigValue is non-sedentary time — the single number
 // most people actually want from this tile ("how much of today wasn't
 // spent sitting").
-func buildActivityLevelSegmentTile(ctx context.Context, db *sql.DB, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
+func buildActivityLevelSegmentTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
 	t.Kind = views.TileKindStat
 	t.Title = "Activity Level"
 	t.Icon = "activity"
@@ -656,8 +662,8 @@ func buildActivityLevelSegmentTile(ctx context.Context, db *sql.DB, t views.Tile
 	dayStr := day.Format(dateLayout)
 	rows, err := db.QueryContext(ctx, `
 		SELECT activity_level, start_time, end_time FROM watch_activity_level_segment
-		WHERE day = ? ORDER BY start_time
-	`, dayStr)
+		WHERE user_id = ? AND day = ? ORDER BY start_time
+	`, userID, dayStr)
 	if err != nil {
 		return t, fmt.Errorf("querying watch_activity_level_segment for %s: %w", dayStr, err)
 	}
@@ -728,7 +734,7 @@ func buildActivityLevelSegmentTile(ctx context.Context, db *sql.DB, t views.Tile
 // sleep session's stage-by-stage timeline (watch_sleep_stage) plus its
 // awake/light/deep/rem minute totals (already computed at sync time onto
 // watch_sleep_session, not recomputed here).
-func fetchSleepDetail(ctx context.Context, db *sql.DB, day time.Time) (*views.DetailData, error) {
+func fetchSleepDetail(ctx context.Context, db *sql.DB, userID int64, day time.Time) (*views.DetailData, error) {
 	dayStr := day.Format(dateLayout)
 	var sessionID int64
 	var startTime, endTime string
@@ -736,9 +742,9 @@ func fetchSleepDetail(ctx context.Context, db *sql.DB, day time.Time) (*views.De
 
 	err := db.QueryRowContext(ctx, `
 		SELECT id, start_time, end_time, minutes_awake, minutes_light, minutes_deep, minutes_rem
-		FROM watch_sleep_session WHERE day = ? AND is_main_sleep = 1
+		FROM watch_sleep_session WHERE user_id = ? AND day = ? AND is_main_sleep = 1
 		ORDER BY duration_minutes DESC LIMIT 1
-	`, dayStr).Scan(&sessionID, &startTime, &endTime, &minutesAwake, &minutesLight, &minutesDeep, &minutesRem)
+	`, userID, dayStr).Scan(&sessionID, &startTime, &endTime, &minutesAwake, &minutesLight, &minutesDeep, &minutesRem)
 	if errors.Is(err, sql.ErrNoRows) {
 		return &views.DetailData{Kind: "stages", Message: "No sleep session recorded for this day."}, nil
 	}
@@ -746,6 +752,9 @@ func fetchSleepDetail(ctx context.Context, db *sql.DB, day time.Time) (*views.De
 		return nil, fmt.Errorf("querying watch_sleep_session for %s: %w", dayStr, err)
 	}
 
+	// sessionID already uniquely identifies a row that just came back
+	// scoped to userID above; the join to watch_sleep_stage has no user_id
+	// of its own (see schema.sql) since it's a pure child of that session.
 	rows, err := db.QueryContext(ctx, `
 		SELECT stage_type, start_time, end_time FROM watch_sleep_stage
 		WHERE sleep_session_id = ? ORDER BY start_time
@@ -819,7 +828,7 @@ func buildChart(day time.Time, history map[string]dashboardDailyRow, extract fun
 	return c
 }
 
-func buildActivitiesTile(ctx context.Context, db *sql.DB, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
+func buildActivitiesTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
 	t.Kind = views.TileKindActivities
 	t.Title = "Activities"
 	t.Icon = "activity"
@@ -833,9 +842,9 @@ func buildActivitiesTile(ctx context.Context, db *sql.DB, t views.TileData, day 
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, exercise_type, start_time, duration_minutes, calories_burned, avg_heart_rate_bpm
 		FROM watch_exercise_session
-		WHERE day BETWEEN ? AND ?
+		WHERE user_id = ? AND day BETWEEN ? AND ?
 		ORDER BY start_time DESC
-	`, rangeStart.Format(dateLayout), day.Format(dateLayout))
+	`, userID, rangeStart.Format(dateLayout), day.Format(dateLayout))
 	if err != nil {
 		return t, fmt.Errorf("querying watch_exercise_session: %w", err)
 	}
@@ -861,16 +870,19 @@ func buildActivitiesTile(ctx context.Context, db *sql.DB, t views.TileData, day 
 }
 
 // fetchActivityDetail loads one exercise session plus every heart-rate
-// sample recorded during its interval, for the detail overlay.
-func fetchActivityDetail(ctx context.Context, db *sql.DB, id int64) (*views.ActivityDetail, error) {
+// sample recorded during its interval, for the detail overlay. userID is
+// part of the WHERE clause (not just an afterthought filter) precisely so
+// one logged-in user can never fetch another user's activity by guessing/
+// incrementing the id query parameter.
+func fetchActivityDetail(ctx context.Context, db *sql.DB, userID, id int64) (*views.ActivityDetail, error) {
 	var d views.ActivityDetail
 	var startTime, endTime string
 	var avgHR sql.NullFloat64
 
 	err := db.QueryRowContext(ctx, `
 		SELECT id, day, exercise_type, start_time, end_time, duration_minutes, calories_burned, avg_heart_rate_bpm
-		FROM watch_exercise_session WHERE id = ?
-	`, id).Scan(&d.ID, &d.Day, &d.Type, &startTime, &endTime, &d.DurationMinutes, &d.CaloriesBurned, &avgHR)
+		FROM watch_exercise_session WHERE user_id = ? AND id = ?
+	`, userID, id).Scan(&d.ID, &d.Day, &d.Type, &startTime, &endTime, &d.DurationMinutes, &d.CaloriesBurned, &avgHR)
 	if err != nil {
 		return nil, fmt.Errorf("querying activity %d: %w", id, err)
 	}
@@ -888,8 +900,8 @@ func fetchActivityDetail(ctx context.Context, db *sql.DB, id int64) (*views.Acti
 
 	rows, err := db.QueryContext(ctx, `
 		SELECT recorded_at, bpm FROM watch_heart_rate_intraday
-		WHERE recorded_at BETWEEN ? AND ? ORDER BY recorded_at
-	`, startTime, endTime)
+		WHERE user_id = ? AND recorded_at BETWEEN ? AND ? ORDER BY recorded_at
+	`, userID, startTime, endTime)
 	if err != nil {
 		return nil, fmt.Errorf("querying heart rate samples for activity %d: %w", id, err)
 	}

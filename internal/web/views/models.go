@@ -14,6 +14,10 @@ type DashboardData struct {
 	View     string // "data" or "journal" — which tab is active
 	Tiles    []TileData
 
+	// Username is the logged-in account's name, shown in the header
+	// alongside the log-out control (see webauth.CurrentUsername).
+	Username string
+
 	// CronometerConnected reports whether encrypted Cronometer credentials
 	// are on file (see internal/cronometer.LoadCredentials) — drives
 	// whether the Nutrition section's account card shows the login form or

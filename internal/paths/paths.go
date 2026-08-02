@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -117,6 +118,18 @@ func (p *Paths) GoogleOAuthFile() string {
 	return filepath.Join(p.ConfigDir(), "google_oauth.json.enc")
 }
 
+// GoogleClientSecretFile holds the Google Cloud OAuth *client* (client_id +
+// client_secret) — the app-wide credential registered once per Google
+// Cloud project, encrypted with the root DB key (crypto.LoadKey(p.DBKeyFile())),
+// not any one user's per-user key. This is a genuinely different secret
+// from a user's own OAuth token (GoogleOAuthFile/UserGoogleOAuthFile): one
+// client JSON is shared by every account's own "Connect Google Health"
+// consent flow, uploaded via the dashboard's settings page instead of a
+// config.yaml file path (see internal/googleauth.SaveClientJSON).
+func (p *Paths) GoogleClientSecretFile() string {
+	return filepath.Join(p.ConfigDir(), "google_oauth_client.json.enc")
+}
+
 // CronometerCredentialsFile holds the encrypted Cronometer username/password
 // (see ARCHITECTURE.md §5 — Cronometer has no OAuth, so this is the
 // long-term encrypted store the credentials live in instead of plaintext
@@ -134,6 +147,60 @@ func (p *Paths) CronometerSessionFile() string {
 func (p *Paths) SyncLogFile() string   { return filepath.Join(p.LogsDir(), "sync.log") }
 func (p *Paths) ServerLogFile() string { return filepath.Join(p.LogsDir(), "server.log") }
 func (p *Paths) DBKeyFile() string     { return filepath.Join(p.KeysDir(), "db.key") }
+
+// UsersKeysDir/UsersConfigDir group every per-user secret under its own
+// subdirectory of the existing keys/ and config/ trees, parallel to the
+// root-level layout (see ARCHITECTURE.md's multi-user section) rather than
+// introducing a third top-level directory.
+func (p *Paths) UsersKeysDir() string   { return filepath.Join(p.KeysDir(), "users") }
+func (p *Paths) UsersConfigDir() string { return filepath.Join(p.ConfigDir(), "users") }
+
+// UserDir is where one user's encrypted provider-credential files live.
+func (p *Paths) UserDir(userID int64) string {
+	return filepath.Join(p.UsersConfigDir(), strconv.FormatInt(userID, 10))
+}
+
+// UserKeyFile is the per-user credential-encryption keyfile: the same
+// {salt, key} JSON shape crypto.GenerateAndSaveKey/LoadKey already produce
+// for keys/db.key, just derived from that user's own account password
+// instead of the root passphrase, and cached here (owner-only permissions)
+// so the background sync scheduler can decrypt this user's Google/
+// Cronometer credentials unattended, regardless of whether they're
+// currently logged into the dashboard (see ARCHITECTURE.md).
+func (p *Paths) UserKeyFile(userID int64) string {
+	return filepath.Join(p.UsersKeysDir(), strconv.FormatInt(userID, 10)+".key")
+}
+
+func (p *Paths) UserGoogleOAuthFile(userID int64) string {
+	return filepath.Join(p.UserDir(userID), "google_oauth.json.enc")
+}
+
+func (p *Paths) UserCronometerCredentialsFile(userID int64) string {
+	return filepath.Join(p.UserDir(userID), "cronometer_credentials.json.enc")
+}
+
+func (p *Paths) UserCronometerSessionFile(userID int64) string {
+	return filepath.Join(p.UserDir(userID), "cronometer_session.json.enc")
+}
+
+// EnsureUserDir creates (and, off Windows, tightens permissions on) the
+// per-user keys/config directories the first time a given user needs one —
+// at signup, or the first time they connect a provider — mirroring
+// EnsureDirs's MkdirAll+Chmod pattern for the root-level directories.
+func (p *Paths) EnsureUserDir(userID int64) error {
+	dirs := []string{p.UsersKeysDir(), p.UsersConfigDir(), p.UserDir(userID)}
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, dirPerm); err != nil {
+			return fmt.Errorf("creating %s: %w", dir, err)
+		}
+		if runtime.GOOS != "windows" {
+			if err := os.Chmod(dir, dirPerm); err != nil {
+				return fmt.Errorf("setting permissions on %s: %w", dir, err)
+			}
+		}
+	}
+	return nil
+}
 
 // EnsureDirs creates the full root folder structure if missing, and
 // tightens permissions on every directory to owner-only. Chmod is skipped
@@ -225,7 +292,7 @@ func (p *Paths) ExternalOutputPath(input string) (string, error) {
 	}
 	abs = filepath.Clean(abs)
 
-	managed := []string{p.DBFile(), p.DBWorkingFile(), p.DBKeyFile(), p.GoogleOAuthFile(), p.ConfigFile(), p.CronometerCredentialsFile(), p.CronometerSessionFile()}
+	managed := []string{p.DBFile(), p.DBWorkingFile(), p.DBKeyFile(), p.GoogleOAuthFile(), p.GoogleClientSecretFile(), p.ConfigFile(), p.CronometerCredentialsFile(), p.CronometerSessionFile()}
 	for _, m := range managed {
 		if abs == m {
 			return "", fmt.Errorf("refusing to write to managed path %q", abs)

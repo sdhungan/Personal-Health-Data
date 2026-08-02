@@ -12,7 +12,9 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
 ├── cronometer-integration.md    # how the Cronometer integration specifically works
 ├── Makefile                     # generate / build / install / run / test / vet / fmt / clean
 ├── go.mod / go.sum
-├── Creds/                       # gitignored — Google OAuth client secret JSON
+├── Creds/                       # gitignored — a convenient place to keep the downloaded
+│                                 # client_secret_*.json before uploading it; NOT read
+│                                 # automatically, see "Google OAuth client" below
 ├── bin/                         # gitignored — build output + local dev/test roots
 │   ├── healthd.exe
 │   ├── explore-root/            # the user's real --root directory: db/, config/, keys/, logs/, service/ —
@@ -31,8 +33,9 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
     ├── googleauth/  # package googleauth — OAuth2 local-redirect flow, encrypted token storage, auto-refreshing http.Client
     ├── googlehealth/# package googlehealth — Google Health API client, data-type definitions, sync engine (DBSyncer), one-shot diagnostic dump
     ├── cronometer/  # package cronometer — mobile-API client, session/credential handling, sync engine (DBSyncer)
-    ├── syncengine/  # package syncengine — source-agnostic day-completeness state machine (pending/partial/complete/missing)
-    ├── cli/         # package cli     — Cobra command tree (root/sync/auth/db/serve), shared *paths.Paths
+    ├── syncengine/  # package syncengine — source-agnostic day-completeness state machine (pending/partial/complete/missing), scoped per user (SQLStore.UserID)
+    ├── webauth/     # package webauth  — dashboard accounts/sessions: CreateUser/Authenticate (bcrypt + per-user Argon2id credential key), CreateSession/LookupSession (24h sliding cookie session), Echo middleware
+    ├── cli/         # package cli     — Cobra command tree (root/sync/auth/db/serve/user), shared *paths.Paths
     └── web/         # package web     — Echo server + dashboard (see below)
         └── views/   # package views  — templ components + their Go view-model structs; no DB access here
 ```
@@ -40,6 +43,16 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
 ## Package responsibilities and how they connect
 
 - **`cmd/healthd`** — trivial `main()`, delegates entirely to `internal/cli`.
+- **`internal/webauth`** — dashboard login accounts, separate from provider
+  auth (`internal/googleauth`/`internal/cronometer`): `users.go`
+  (`CreateUser`/`Authenticate`, bcrypt for login verification plus an
+  independently-derived per-user Argon2id key — see `internal/crypto` —
+  that encrypts that user's own Google/Cronometer credential files),
+  `sessions.go` (`CreateSession`/`LookupSession`/`DeleteSession`/
+  `CleanupExpired` against `web_session`, a 24h sliding-inactivity cookie
+  session, token hashed before storage), `middleware.go` (Echo middleware
+  gating every dashboard route, `CurrentUserID`/`CurrentUsername` for
+  handlers to read). See `ARCHITECTURE.md` §10.
 - **`internal/cli`** — Cobra command tree. `root.go` resolves `--root` once
   (`PersistentPreRunE`) into a shared `appPaths *paths.Paths` every
   subcommand file (`sync.go`, `auth.go`, `db.go`, `serve.go`,

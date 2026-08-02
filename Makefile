@@ -1,6 +1,17 @@
 .PHONY: generate build install run test vet fmt clean
 
-BINARY := bin/healthd
+# $(OS) is a real environment variable set to "Windows_NT" by cmd.exe/PowerShell
+# on Windows and left unset everywhere else (Linux, macOS) — this is the
+# standard GNU Make idiom for a host-OS check, and it works whether `make`
+# itself is native, from Git Bash, or from WSL/MSYS2, since those all inherit
+# the same Windows environment. Windows needs the .exe suffix to run the
+# binary by relative path (./bin/healthd would not be found without it);
+# Linux/macOS must NOT have one.
+ifeq ($(OS),Windows_NT)
+    BINARY := bin/healthd.exe
+else
+    BINARY := bin/healthd
+endif
 
 generate: ## compile .templ files into Go
 	templ generate

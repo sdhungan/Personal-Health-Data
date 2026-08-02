@@ -1,0 +1,49 @@
+package views
+
+// LoginPage is the dashboard's entry gate — a plain HTML form (no Datastar
+// needed for a one-shot, non-reactive flow like this) POSTing straight to
+// /login. next carries the originally-requested path (see webauth's
+// middleware) so a login redirected here returns to where the user meant
+// to go, not always the dashboard root. infoMsg is a neutral (non-error)
+// banner — currently only used right after a successful account deletion
+// (see handleAccountDelete's "/login?deleted=1" redirect) to confirm it
+// actually took effect, distinct from errMsg's red styling.
+templ LoginPage(errMsg, infoMsg, next string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>Log in — Personal Health Dashboard</title>
+			<link rel="stylesheet" href="/static/style.css"/>
+		</head>
+		<body>
+			<main class="auth-page">
+				<h1 class="brand-title">Personal Health Dashboard</h1>
+				if infoMsg != "" {
+					<p class="body-saved-status">{ infoMsg }</p>
+				}
+				<form method="post" action="/login" class="body-form">
+					if next != "" {
+						<input type="hidden" name="next" value={ next }/>
+					}
+					<div class="body-field">
+						<label for="username">Username</label>
+						<input id="username" name="username" type="text" autocomplete="username" required autofocus/>
+					</div>
+					<div class="body-field">
+						<label for="password">Password</label>
+						<input id="password" name="password" type="password" autocomplete="current-password" required/>
+					</div>
+					if errMsg != "" {
+						<p class="journal-error">{ errMsg }</p>
+					}
+					<div class="body-form-footer">
+						<button type="submit" class="body-carry-btn">Log in</button>
+					</div>
+				</form>
+				<p><a href="/signup">Create an account</a></p>
+			</main>
+		</body>
+	</html>
+}

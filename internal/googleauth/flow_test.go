@@ -5,14 +5,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"golang.org/x/oauth2"
-
-	"github.com/sdhungan/Personal-Health-Data/internal/config"
 )
 
 // testInstalledAppCredentials is a fake OAuth client JSON matching the
@@ -55,21 +51,7 @@ func waitForPort(t *testing.T, port int) {
 	t.Fatalf("nothing listening on port %d after 3s", port)
 }
 
-func testConfig(t *testing.T, port int) *config.Config {
-	t.Helper()
-	credsPath := filepath.Join(t.TempDir(), "client_secret_test.json")
-	if err := os.WriteFile(credsPath, []byte(testInstalledAppCredentials), 0o600); err != nil {
-		t.Fatalf("writing test credentials file: %v", err)
-	}
-	return &config.Config{
-		Google: config.GoogleConfig{
-			CredentialsFile: credsPath,
-			CallbackPort:    port,
-		},
-	}
-}
-
-func runFlow(cfg *config.Config) <-chan struct {
+func runFlow(clientJSON []byte, port int) <-chan struct {
 	token *oauth2.Token
 	err   error
 } {
@@ -78,7 +60,7 @@ func runFlow(cfg *config.Config) <-chan struct {
 		err   error
 	}, 1)
 	go func() {
-		tok, err := RunConsentFlow(context.Background(), cfg)
+		tok, err := RunConsentFlow(context.Background(), clientJSON, port)
 		done <- struct {
 			token *oauth2.Token
 			err   error
@@ -89,8 +71,7 @@ func runFlow(cfg *config.Config) <-chan struct {
 
 func TestRunConsentFlowRejectsMismatchedState(t *testing.T) {
 	port := freePort(t)
-	cfg := testConfig(t, port)
-	done := runFlow(cfg)
+	done := runFlow([]byte(testInstalledAppCredentials), port)
 	waitForPort(t, port)
 
 	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/callback?state=wrong&code=abc", port))
@@ -111,13 +92,12 @@ func TestRunConsentFlowRejectsMismatchedState(t *testing.T) {
 
 func TestRunConsentFlowRejectsMissingCode(t *testing.T) {
 	port := freePort(t)
-	cfg := testConfig(t, port)
 
 	// We need the real state value this time, so extract it from the
 	// printed auth URL is awkward from outside the package — instead,
 	// exploit that a request with no state at all still reaches the state
 	// check and fails deterministically before ever needing the real code.
-	done := runFlow(cfg)
+	done := runFlow([]byte(testInstalledAppCredentials), port)
 	waitForPort(t, port)
 
 	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/callback", port))
@@ -138,8 +118,7 @@ func TestRunConsentFlowRejectsMissingCode(t *testing.T) {
 
 func TestRunConsentFlowPropagatesAuthorizationDenied(t *testing.T) {
 	port := freePort(t)
-	cfg := testConfig(t, port)
-	done := runFlow(cfg)
+	done := runFlow([]byte(testInstalledAppCredentials), port)
 	waitForPort(t, port)
 
 	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/callback?error=access_denied", port))
@@ -159,8 +138,7 @@ func TestRunConsentFlowPropagatesAuthorizationDenied(t *testing.T) {
 }
 
 func TestRunConsentFlowMissingCredentials(t *testing.T) {
-	cfg := &config.Config{Google: config.GoogleConfig{CallbackPort: freePort(t)}}
-	if _, err := RunConsentFlow(context.Background(), cfg); err == nil {
-		t.Fatal("expected an error when client_id/client_secret are unset, got nil")
+	if _, err := RunConsentFlow(context.Background(), []byte(`{}`), freePort(t)); err == nil {
+		t.Fatal("expected an error when the client JSON has no client_id/client_secret, got nil")
 	}
 }
