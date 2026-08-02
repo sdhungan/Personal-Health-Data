@@ -175,6 +175,72 @@ for a nested (non-root) `data-signals`, so don't assume they do.
   alone doesn't rebuild the binary either — see the `go build ./...` gotcha
   above.
 
+## Web dashboard auth/UI session (2026-08-02, same day as the multi-user rewrite below)
+
+A follow-up session picked up the freshly-built multi-user login/onboarding
+work and got it actually working end to end, then did a UI pass. Findings
+worth not re-discovering:
+
+- **A cached-`nil` map entry is not "uncached."** `web.Server`'s
+  `googleSyncers map[int64]*googlehealth.DBSyncer` treats *any* present key —
+  including one explicitly set to `nil` — as "already checked this user,"
+  distinguished from "never checked" via the map's own `ok` return (so a
+  user who never connects Google isn't re-probed the filesystem on every
+  request). `handleOnboardingConnectGoogle` used to call
+  `s.setGoogleSyncer(userID, nil)` right after saving a freshly-obtained
+  token, with a comment claiming this "forces a rebuild on next use" — it
+  does the opposite: it writes the literal "not connected" sentinel into
+  the cache, permanently (until a process restart) reporting "Google Health
+  isn't authorized yet" even though the token was just saved successfully.
+  Fixed by building the real syncer immediately (`s.buildGoogleSyncer(userID)`)
+  and caching *that* — see `ARCHITECTURE.md` §10 and `account.go`'s
+  `handleAccountDelete` for the *other* correct pattern (a bare `delete()`
+  off the map, when you actually do want "not connected" to be the honest
+  answer, e.g. after the account itself is gone).
+- **Two credential forms on one origin can get their browser-saved
+  passwords swapped if their fields look the same to the browser.** The
+  onboarding page's Cronometer connect form used `name="username"`/
+  `name="password"` + `autocomplete="username"`/`"current-password"` —
+  identical field identity to the actual dashboard login form on the same
+  origin. Chrome/Brave/etc. save/link credentials by exactly those signals,
+  so connecting Cronometer got the browser to autofill *those* credentials
+  into the next `/login` visit, silently replacing what the user typed.
+  Fixed by renaming the fields (`crono_username`/`crono_password`, updated
+  in the handler too) and setting `autocomplete="off"` on both this form and
+  the dashboard's ongoing Cronometer account card. General rule: never reuse
+  `username`/`password`-shaped `name`+`autocomplete` pairs for a credential
+  that isn't this site's own login, even on a page that has no visible
+  connection to the login form.
+- **`kill %1` doesn't work across separate Bash tool calls.** Each Bash
+  invocation in this harness is a fresh shell with no job-control table, so
+  a `&`-backgrounded test server started in one call can't be reaped by
+  `%1` in a later call — it silently fails (redirect stderr and you'll miss
+  it). A subsequent `rm -rf` of that server's `--root` while it's still
+  running doesn't stop it either; the process keeps the deleted directory's
+  inode open and any request that touches a since-deleted file (e.g. the
+  uploaded Google OAuth client) fails confusingly. Always capture the exact
+  PID (`pgrep -f "healthd --root <path>"`) and `kill` that, and verify with
+  `ps`/`lsof` both before starting a scratch server (in case something's
+  already bound to the port) and after killing it.
+- **`schema.sql`'s `ON DELETE CASCADE` cannot be relied on from application
+  code** — see `ARCHITECTURE.md` §10's "Account deletion" paragraph.
+  SQLite's foreign-key enforcement is a per-connection `PRAGMA`; Go's pooled
+  `*sql.DB` doesn't guarantee any given statement runs on a connection that
+  ever had it turned on. `webauth.DeleteUser` deletes every table
+  explicitly instead.
+- The `Creds/`/Google-OAuth-client-upload confusion from earlier this same
+  day (see `CLAUDE.md`'s "Google OAuth client setup") was a real dead end
+  someone could hit again: nothing in the app reads a `Creds/`/`Certs/`
+  folder automatically, ever — the client JSON must be uploaded once per
+  `--root` via `/settings/google-client` or `healthd google-client set`.
+- The dashboard's category colors (`--cat-*` in `style.css`) and the
+  light-mode variant (`:root[data-theme="light"]`) are both validated with
+  the `dataviz` skill's `scripts/validate_palette.js`, run separately per
+  mode against that mode's own surface color — don't eyeball a new
+  category color or assume a value that passes for dark also passes for
+  light; re-run the validator (see `style.css`'s own comments for the exact
+  checks each palette needed to pass).
+
 ## Multi-user accounts (2026-08-02)
 
 `healthd` went from single-tenant (one implicit owner, no login) to a real
@@ -241,15 +307,22 @@ step-goal tile (replaced by a progress ring next to the steps tile's big
 value) are all done — see `structure.md`/`ARCHITECTURE.md` for what exists
 now rather than re-deriving it from an old gap list. Cronometer is fully
 integrated (`cronometer-integration.md`). The dashboard itself has had a UI
-pass since: a native date picker on the day label, charts capped to a
-sane on-screen size and given a consistent 24h/thin-line treatment, empty
-tiles (genuinely no data for the day) omitted from the page instead of
-showing a placeholder (`shouldHideEmptyTile` in `handlers.go` — Body
-Measurements is exempt, it's an input form not a stat), a handful of tiles
-(Steps/Heart rate/Body/Sleep) defaulting to expanded on load
-(`defaultExpandedKind`), and the Nutrition section laid out as two explicit
-rows (kcal metrics, then macros) rather than left to the general grid's
-auto-fill.
+pass since: a native date picker on the day label plus a "Today" button
+(only rendered when the viewed day isn't today), charts capped to a
+sane on-screen size and given a consistent 24h/thin-line treatment, a tile
+with genuinely no data for the day excluded from the grid but its title
+still surfaced via one compact per-section `EmptySummaryTile` rather than
+either a full placeholder or silently vanishing (`shouldHideEmptyTile` +
+`MissingByCategory` in `handlers.go` — Body Measurements is exempt, it's an
+input form not a stat), a handful of tiles (Steps/Heart rate/Body/Sleep)
+defaulting to expanded on load (`defaultExpandedKind`), and the Nutrition
+section laid out as two explicit rows (kcal metrics, then macros, each only
+rendered when non-empty) rather than left to the general grid's auto-fill.
+As of 2026-08-02: full multi-user login/signup/onboarding/settings/account
+pages (see "Multi-user accounts" below and `ARCHITECTURE.md` §10), a
+light/dark theme toggle, and a consolidated header user-menu dropdown
+replacing three separate inline controls — see the "Web dashboard auth/UI
+session" findings above for the specific bugs this surfaced and fixed.
 
 ## Still-open, deliberately-not-fixed gaps
 

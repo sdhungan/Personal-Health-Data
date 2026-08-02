@@ -47,8 +47,15 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
   auth (`internal/googleauth`/`internal/cronometer`): `users.go`
   (`CreateUser`/`Authenticate`, bcrypt for login verification plus an
   independently-derived per-user Argon2id key — see `internal/crypto` —
-  that encrypts that user's own Google/Cronometer credential files),
-  `sessions.go` (`CreateSession`/`LookupSession`/`DeleteSession`/
+  that encrypts that user's own Google/Cronometer credential files;
+  `DeleteUser` permanently removes an account — every row across
+  `userDataTables` (one `DELETE ... WHERE user_id = ?` per table, explicit
+  rather than relying on `schema.sql`'s `ON DELETE CASCADE`, since SQLite's
+  foreign-key enforcement is a per-connection `PRAGMA` that Go's pooled
+  `*sql.DB` can't guarantee is set — see `ARCHITECTURE.md` §10), then the
+  `users` row, then that account's `keys/users/<id>.key` and
+  `config/users/<id>/` from disk), `sessions.go`
+  (`CreateSession`/`LookupSession`/`DeleteSession`/
   `CleanupExpired` against `web_session`, a 24h sliding-inactivity cookie
   session, token hashed before storage), `middleware.go` (Echo middleware
   gating every dashboard route, `CurrentUserID`/`CurrentUsername` for
@@ -135,23 +142,60 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
   constructs both (the CLI / the dashboard's force-sync handler, which runs
   both sources' sync in parallel goroutines).
 - **`internal/web`** — the dashboard server itself:
-  - `server.go` — `Server` struct, `New()` wiring (Echo + optional
-    `googlehealth.DBSyncer` if Google auth is set up + optional
-    `cronometer.DBSyncer` if credentials are on file + `syncengine.SQLStore`),
+  - `server.go` — `Server` struct (`RootKey`, the root DB key, decrypts the
+    one app-wide Google OAuth client JSON via `googleClientJSON()` — a
+    different secret from any per-user credential), `New()` wiring (Echo +
+    `googleSyncers`/`cronoSyncers`: one `*googlehealth.DBSyncer`/
+    `*cronometer.DBSyncer` cached per user id, built lazily on first use from
+    that user's own per-user credential files via `buildGoogleSyncer`/
+    `buildCronometerSyncer` — a cached `nil` deliberately means "checked,
+    this user hasn't connected this provider," distinguished from "never
+    checked" via the map's own `ok` return; `setGoogleSyncer`/
+    `setCronometerSyncer` overwrite an entry so a running server picks up a
+    fresh connect or a deletion immediately, no restart needed —
+    `handleOnboardingConnectGoogle`/`handleAccountDelete` are the two
+    callers that matter here, see their own doc comments for why one passes
+    a freshly-built syncer and the other a bare `delete()` off the map, never
+    a stored `nil` after a successful connect), `cronometerConnected()`),
     `Start()` (serve + periodic `Store.Checkpoint()` + graceful shutdown).
-  - `routes.go` — every HTTP route, all under `views.APIPrefix` (`/api`)
-    except the page (`/`) and `/static`.
-  - `handlers.go` — Echo handlers: `handleIndex` (full page),
-    `handleView` (day-nav / data↔journal tab switch, SSE), `handleTile`
-    (expand/collapse one tile, SSE), `handleForceSync` (manual sync button,
-    runs Google Health and Cronometer sync in parallel, backgrounded
-    goroutine + `syncingDays` de-dup), `handleActivity`/`handleFoodServing`
-    (the shared click-to-detail overlay, one handler per list kind),
-    `handleJournalSave`/`handleJournalBeacon`. Also `buildDashboardData`
-    (assembles every tile for a day, skipping ones with no data for that
-    day — see `shouldHideEmptyTile` — and defaulting a handful of tiles
-    to already-expanded, see `defaultExpandedKind`) and `dayLabel`/`parseDay`
-    helpers.
+  - `routes.go` — every route. `/login`, `/signup`, and `/static` are the
+    only ones NOT behind `webauth.Middleware`; every other route (the
+    dashboard page, `/settings/*`, `/onboarding/*`, `/logout`, and
+    everything under `views.APIPrefix`, `/api`) is.
+  - `handlers.go` — the main dashboard's Echo handlers: `handleIndex` (full
+    page), `handleView` (day-nav / data↔journal tab switch, SSE),
+    `handleTile` (expand/collapse one tile, SSE), `handleForceSync` (manual
+    sync button, runs Google Health and Cronometer sync in parallel,
+    backgrounded goroutine + `syncingDays` de-dup), `handleActivity`/
+    `handleFoodServing` (the shared click-to-detail overlay, one handler per
+    list kind), `handleJournalSave`/`handleJournalBeacon`. Also
+    `buildDashboardData` (assembles every tile for a day; a tile with no
+    data for the day is excluded from `Tiles` — see `shouldHideEmptyTile` —
+    but its title is kept, bucketed by category into
+    `DashboardData.MissingByCategory` for `dashboard.templ`'s
+    `EmptySummaryTile`, rather than dropped; also defaults a handful of
+    tiles to already-expanded, see `defaultExpandedKind`) and
+    `dayLabel`/`parseDay` helpers.
+  - `auth.go` — login/signup/logout (`webauth.Authenticate`/`CreateUser`/
+    `CreateSession`, plain full-page POST+redirect, no Datastar) and the
+    post-signup onboarding flow (`/onboarding/connect`,
+    `handleOnboardingConnectGoogle`/`handleOnboardingConnectCronometer`/
+    `handleOnboardingSkip`) — Google's reuses
+    `googleauth.RunConsentFlow` unchanged; Cronometer's shares
+    `connectCronometer` (verify-then-save-then-activate) with
+    `cronometer.go`'s `handleCronometerLogin`, the dashboard's own ongoing
+    account-settings card.
+  - `settings.go` — the app-wide Google OAuth client upload page
+    (`/settings/google-client`, `handleGoogleClientSettingsPage`/
+    `handleGoogleClientUpload`) — not per-user, see `account.go` for the
+    per-account settings page.
+  - `account.go` — the per-account settings page (`/settings/account`,
+    `handleAccountSettingsPage`) and self-service account deletion
+    (`handleAccountDelete`: re-verifies the account password, calls
+    `webauth.DeleteUser`, evicts that user's id from `googleSyncers`/
+    `cronoSyncers`, clears the session cookie, redirects to
+    `/login?deleted=1`) — always scoped to `webauth.CurrentUserID(c)`, never
+    a request parameter.
   - `data.go` — the Google-Health-side stat-tile data layer:
     `dashboardDailyRow` (embeds `healthdata.DailySummary` plus the Cronometer
     macro/energy columns the dashboard also shows — a web-layer composite,
@@ -175,23 +219,41 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
   - `assets.go` — `//go:embed` of `static/datastar.js` + `static/style.css`.
   - `static/` — `datastar.js` (vendored, self-hosted) and `style.css` (the
     entire visual system — no build step, plain CSS with custom properties).
+    Two independently-tuned categorical palettes live here: `:root` (dark,
+    default) and `:root[data-theme="light"]`, both validated with the
+    `dataviz` skill's `scripts/validate_palette.js` against their own
+    surface color — see each block's own comment for the exact checks and
+    why a couple of values differ from a naive Apple-Health-color copy.
   - **`internal/web/views`** (package `views`) — templ components + their
-    plain-Go view-model structs (`models.go`: `DashboardData`, `TileData`,
-    `ChartData`, `StageSegment`, `ActivitySummary`/`ActivityDetail`,
-    `ServingSummary`/`FoodServingDetail`, `JournalData`, etc.). Nothing here
-    touches `*sql.DB` — `internal/web` builds structs, hands them to a
-    component. Key files: `layout.templ` (page shell, header, day-nav +
-    date picker, sync button, the shared `#detail-overlay`/`$detailOpen`
-    click-to-detail overlay), `dashboard.templ` (tile grid + per-kind tile
-    bodies, the Nutrition section's two-row kcal/macro layout), `body.templ`
-    (body measurement form), `activities.templ`/`foodlog.templ` (the two
-    detail-overlay fragments that patch into the shared overlay),
-    `cronometer.templ` (account login card), `journal.templ`, `icons.templ`
-    (inline SVG icon set), `chart.go` (server-side SVG chart rendering — bar
-    chart with optional goal line, line chart, and segment timeline, all
-    sharing one hover-tooltip mechanism — no client-side charting library),
-    `urls.go` (every backend URL the templates reference, all built through
-    `APIURL`), `helpers.go` (formatting: `FormatMinutes`, `FormatNumber`,
+    plain-Go view-model structs (`models.go`: `DashboardData` — including
+    `MissingByCategory`, `Today` — `TileData`, `ChartData`, `StageSegment`,
+    `ActivitySummary`/`ActivityDetail`, `ServingSummary`/`FoodServingDetail`,
+    `JournalData`, etc.). Nothing here touches `*sql.DB` — `internal/web`
+    builds structs, hands them to a component. Key files: `layout.templ`
+    (page shell; `Header` — brand-as-home-link, the light/dark
+    `ThemeToggleButton`, and the user-menu dropdown, avatar → Account/Google
+    settings/Log out, `$userMenuOpen`; `DayNav` — prev/next day, the native
+    date picker, a `day-nav-today-btn` shown only when the viewed day isn't
+    `Today`, and the sync button; `themeScript()` — the before-first-paint
+    `data-theme` bootstrap every full-page template includes; the shared
+    `#detail-overlay`/`$detailOpen` click-to-detail overlay),
+    `dashboard.templ` (tile grid + per-kind tile bodies, the Nutrition
+    section's two-row kcal/macro layout — each row only renders if non-empty
+    — and `EmptySummaryTile`, the one-per-section compact stand-in for
+    every metric with no data that day), `body.templ` (body measurement
+    form), `activities.templ`/`foodlog.templ` (the two detail-overlay
+    fragments that patch into the shared overlay), `cronometer.templ`
+    (account login card), `journal.templ`, `login.templ`/`signup.templ`
+    (plain POST+redirect auth forms), `settings.templ` (Google OAuth client
+    upload page), `account.templ` (per-account settings + delete-account
+    form), `connect_accounts.templ` (post-signup onboarding page),
+    `icons.templ` (inline SVG icon set), `chart.go` (server-side SVG chart
+    rendering — bar chart with optional goal line, line chart, and segment
+    timeline, all sharing one hover-tooltip mechanism — no client-side
+    charting library), `urls.go` (every backend URL the templates
+    reference, all built through `APIURL`; `initialSignals` seeds the
+    dashboard's root Datastar signals including `userMenuOpen`),
+    `helpers.go` (formatting: `FormatMinutes`, `FormatNumber`,
     `humanizeExerciseType`). Each `X.templ` has a generated, do-not-edit
     `X_templ.go` sibling.
 
