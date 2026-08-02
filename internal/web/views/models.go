@@ -11,8 +11,17 @@ type DashboardData struct {
 	DayLabel string // "Today", "Yesterday", or a formatted date
 	PrevDay  string
 	NextDay  string
+	Today    string // "YYYY-MM-DD" for the real current day — lets DayNav's "Today" button jump straight there regardless of which day is selected, distinct from Day (the day being viewed)
 	View     string // "data" or "journal" — which tab is active
 	Tiles    []TileData
+
+	// MissingByCategory lists, per dashboard section, the titles of tiles
+	// that had no data for this day and were filtered out of Tiles (see
+	// shouldHideEmptyTile in handlers.go) — rendered as one compact
+	// EmptySummaryTile per section instead of either a full-size empty tile
+	// per metric or the section leaving an inconsistent gap by vanishing
+	// silently.
+	MissingByCategory map[string][]string
 
 	// Username is the logged-in account's name, shown in the header
 	// alongside the log-out control (see webauth.CurrentUsername).

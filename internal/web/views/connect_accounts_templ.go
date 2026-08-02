@@ -36,83 +36,91 @@ func OnboardingPage(googleConnected bool, googleError string, cronometerConnecte
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!doctype html><html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Connect your accounts — Personal Health Dashboard</title><link rel=\"stylesheet\" href=\"/static/style.css\"></head><body><main class=\"auth-page auth-page-wide\"><h1 class=\"brand-title\">Connect your accounts</h1><p>Connect Google Health and Cronometer so healthd can start syncing your data automatically in the background. Either one can be connected later instead — nothing here is required to continue.</p><section class=\"tile\" data-category=\"activity\"><div class=\"tile-header\"><div class=\"tile-header-left\"><span class=\"tile-title\">Google Health</span></div></div><div class=\"tile-body\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!doctype html><html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Connect your accounts — Personal Health Dashboard</title>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = themeScript().Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<link rel=\"stylesheet\" href=\"/static/style.css\"></head><body><main class=\"auth-page auth-page-wide\"><h1 class=\"brand-title\">Connect your accounts</h1><p>Connect Google Health and Cronometer so healthd can start syncing your data automatically in the background. Either one can be connected later instead — nothing here is required to continue.</p><section class=\"tile\" data-category=\"activity\"><div class=\"tile-header\"><div class=\"tile-header-left\"><span class=\"tile-title\">Google Health</span></div></div><div class=\"tile-body\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if googleConnected {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<p class=\"body-saved-status\">Connected.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<p class=\"body-saved-status\">Connected.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<p>Opens Google's consent screen in a new browser tab — approve access, then come back here.</p><p class=\"journal-error\">Skipping means Steps, Heart Rate, Sleep, Body Measurements (from a connected scale), and every other watch-synced tile won't have data until you connect this later.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "<p>Opens Google's consent screen in a new browser tab — approve access, then come back here.</p><p class=\"journal-error\">Skipping means Steps, Heart Rate, Sleep, Body Measurements (from a connected scale), and every other watch-synced tile won't have data until you connect this later.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if googleError != "" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "<p class=\"journal-error\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "<p class=\"journal-error\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var2 string
 				templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinStringErrs(googleError)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/connect_accounts.templ`, Line: 37, Col: 46}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/connect_accounts.templ`, Line: 38, Col: 46}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, " <form method=\"post\" action=\"/onboarding/connect/google\"><button type=\"submit\" class=\"body-carry-btn\">Connect Google Health</button></form>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, " <form method=\"post\" action=\"/onboarding/connect/google\"><button type=\"submit\" class=\"body-carry-btn\">Connect Google Health</button></form>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "</div></section><section class=\"tile\" data-category=\"nutrition\"><div class=\"tile-header\"><div class=\"tile-header-left\"><span class=\"tile-title\">Cronometer</span></div></div><div class=\"tile-body\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "</div></section><section class=\"tile\" data-category=\"nutrition\"><div class=\"tile-header\"><div class=\"tile-header-left\"><span class=\"tile-title\">Cronometer</span></div></div><div class=\"tile-body\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if cronometerConnected {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<p class=\"body-saved-status\">Connected.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "<p class=\"body-saved-status\">Connected.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "<p class=\"journal-error\">Skipping means Nutrition (energy, macros) and the Food Log tile won't have data until you connect this later.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<p class=\"journal-error\">Skipping means Nutrition (energy, macros) and the Food Log tile won't have data until you connect this later.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if cronometerError != "" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<p class=\"journal-error\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "<p class=\"journal-error\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var3 string
 				templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(cronometerError)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/connect_accounts.templ`, Line: 58, Col: 50}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/connect_accounts.templ`, Line: 59, Col: 50}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, " <form method=\"post\" action=\"/onboarding/connect/cronometer\" class=\"body-form\"><div class=\"body-field\"><label for=\"crono-email\">Cronometer email</label> <input id=\"crono-email\" name=\"crono_username\" type=\"email\" autocomplete=\"off\" required></div><div class=\"body-field\"><label for=\"crono-password\">Cronometer password</label> <input id=\"crono-password\" name=\"crono_password\" type=\"password\" autocomplete=\"off\" required></div><div class=\"body-form-footer\"><button type=\"submit\" class=\"body-carry-btn\">Connect Cronometer</button></div></form>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, " <form method=\"post\" action=\"/onboarding/connect/cronometer\" class=\"body-form\"><div class=\"body-field\"><label for=\"crono-email\">Cronometer email</label> <input id=\"crono-email\" name=\"crono_username\" type=\"email\" autocomplete=\"off\" required></div><div class=\"body-field\"><label for=\"crono-password\">Cronometer password</label> <input id=\"crono-password\" name=\"crono_password\" type=\"password\" autocomplete=\"off\" required></div><div class=\"body-form-footer\"><button type=\"submit\" class=\"body-carry-btn\">Connect Cronometer</button></div></form>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "</div></section><form method=\"post\" action=\"/onboarding/skip\"><button type=\"submit\" class=\"body-carry-btn\">Continue to Dashboard</button></form></main></body></html>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "</div></section><form method=\"post\" action=\"/onboarding/skip\"><button type=\"submit\" class=\"body-carry-btn\">Continue to Dashboard</button></form></main></body></html>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

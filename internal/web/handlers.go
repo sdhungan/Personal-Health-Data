@@ -67,8 +67,10 @@ func buildDashboardData(ctx context.Context, db *sql.DB, userID int64, day time.
 		DayLabel:            dayLabel(day),
 		PrevDay:             day.AddDate(0, 0, -1).Format(dateLayout),
 		NextDay:             day.AddDate(0, 0, 1).Format(dateLayout),
+		Today:               time.Now().Format(dateLayout),
 		View:                view,
 		CronometerConnected: cronometerConnected,
+		MissingByCategory:   map[string][]string{},
 	}
 
 	today, err := fetchDailySummaryRow(ctx, db, userID, dayStr)
@@ -107,6 +109,9 @@ func buildDashboardData(ctx context.Context, db *sql.DB, userID int64, day time.
 			return data, err
 		}
 		if shouldHideEmptyTile(t) {
+			if t.Title != "" {
+				data.MissingByCategory[t.Category] = append(data.MissingByCategory[t.Category], t.Title)
+			}
 			continue
 		}
 		data.Tiles = append(data.Tiles, t)
@@ -171,7 +176,8 @@ func (s *Server) handleView(c echo.Context) error {
 		data := views.DashboardData{
 			Day: day.Format(dateLayout), DayLabel: dayLabel(day),
 			PrevDay: day.AddDate(0, 0, -1).Format(dateLayout), NextDay: day.AddDate(0, 0, 1).Format(dateLayout),
-			View: "journal",
+			Today: time.Now().Format(dateLayout),
+			View:  "journal",
 		}
 		return sse.PatchElementTempl(views.JournalViewBody(data, j))
 	}
@@ -376,7 +382,8 @@ func (s *Server) patchCurrentView(sse *datastar.ServerSentEventGenerator, ctx co
 		data := views.DashboardData{
 			Day: dayStr, DayLabel: dayLabel(day),
 			PrevDay: day.AddDate(0, 0, -1).Format(dateLayout), NextDay: day.AddDate(0, 0, 1).Format(dateLayout),
-			View: "journal",
+			Today: time.Now().Format(dateLayout),
+			View:  "journal",
 		}
 		return sse.PatchElementTempl(views.JournalViewBody(data, j))
 	}

@@ -30,23 +30,32 @@ func tilesForCategory(tiles []TileData, category string) []TileData {
 
 // Dashboard renders every section that has something to show.
 // data.Tiles already excludes tiles with no data for the day (see
-// shouldHideEmptyTile in handlers.go) — a section with zero tiles left is
-// skipped entirely, except "nutrition", which always renders since its
-// Cronometer account card (connect prompt or status) needs to stay
-// reachable even with no metrics synced yet.
+// shouldHideEmptyTile in handlers.go) — those titles are collected in
+// data.MissingByCategory instead and rendered as one compact
+// EmptySummaryTile per section, so a section with some data and some empty
+// metrics doesn't lose track of what's missing, and a section that's
+// entirely empty still renders one small tile naming what's missing rather
+// than vanishing and leaving an inconsistent gap in the page's rhythm.
+// "nutrition" always renders regardless, since its Cronometer account card
+// (connect prompt or status) needs to stay reachable even with no metrics
+// synced yet.
 templ Dashboard(data DashboardData) {
 	<div class="dashboard" id="dashboard-grid">
 		for _, section := range tileSections {
 			{{ tiles := tilesForCategory(data.Tiles, section.Key) }}
-			if len(tiles) > 0 || section.Key == "nutrition" {
+			{{ missing := data.MissingByCategory[section.Key] }}
+			if len(tiles) > 0 || len(missing) > 0 || section.Key == "nutrition" {
 				<section class="dashboard-section">
 					<h2 class="section-title">{ section.Title }</h2>
 					if section.Key == "nutrition" {
-						@NutritionSection(tiles, data.Day, data.CronometerConnected, data.CronometerMessage)
+						@NutritionSection(tiles, missing, data.Day, data.CronometerConnected, data.CronometerMessage)
 					} else {
 						<div class="dashboard-grid">
 							for _, t := range tiles {
 								@Tile(t, data.Day)
+							}
+							if len(missing) > 0 {
+								@EmptySummaryTile(missing)
 							}
 						</div>
 					}
@@ -58,25 +67,46 @@ templ Dashboard(data DashboardData) {
 
 // NutritionSection lays the Nutrition category out as two explicit rows —
 // kcal metrics (Energy/Expenditure/Deficit), then the 3 macros — followed
-// by the detailed food log and the Cronometer account card, rather than
-// leaving all 6 stat tiles to whatever the general dashboard-grid's
-// auto-fill happens to wrap into at the current viewport width.
-templ NutritionSection(tiles []TileData, day string, cronometerConnected bool, cronometerMessage string) {
+// by the detailed food log, an EmptySummaryTile for whichever of those had
+// no data, and the Cronometer account card, rather than leaving all 6 stat
+// tiles to whatever the general dashboard-grid's auto-fill happens to wrap
+// into at the current viewport width.
+templ NutritionSection(tiles []TileData, missing []string, day string, cronometerConnected bool, cronometerMessage string) {
 	{{ kcalTiles, macroTiles, foodLogTile := splitNutritionTiles(tiles) }}
-	<div class="nutrition-row">
-		for _, t := range kcalTiles {
-			@Tile(t, day)
-		}
-	</div>
-	<div class="nutrition-row">
-		for _, t := range macroTiles {
-			@Tile(t, day)
-		}
-	</div>
+	if len(kcalTiles) > 0 {
+		<div class="nutrition-row">
+			for _, t := range kcalTiles {
+				@Tile(t, day)
+			}
+		</div>
+	}
+	if len(macroTiles) > 0 {
+		<div class="nutrition-row">
+			for _, t := range macroTiles {
+				@Tile(t, day)
+			}
+		</div>
+	}
 	if foodLogTile != nil {
 		@Tile(*foodLogTile, day)
 	}
+	if len(missing) > 0 {
+		<div class="nutrition-row">
+			@EmptySummaryTile(missing)
+		</div>
+	}
 	@CronometerAccountCard(cronometerConnected, cronometerMessage)
+}
+
+// EmptySummaryTile is the compact stand-in for every metric that had no
+// data today (see shouldHideEmptyTile in handlers.go) — one small, low-
+// emphasis tile per section listing what's missing, instead of either a
+// full-size empty placeholder per metric or the section silently vanishing.
+templ EmptySummaryTile(titles []string) {
+	<div class="tile tile-empty-summary">
+		<span class="tile-empty-summary-label">No data today:</span>
+		<span class="tile-empty-summary-list">{ strings.Join(titles, " · ") }</span>
+	</div>
 }
 
 // splitNutritionTiles buckets the Nutrition category's tiles by their known

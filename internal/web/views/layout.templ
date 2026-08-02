@@ -10,6 +10,7 @@ templ Page(data DashboardData) {
 			<meta charset="UTF-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<title>Personal Health Dashboard</title>
+			@themeScript()
 			<link rel="stylesheet" href="/static/style.css"/>
 			<script type="module" src="/static/datastar.js"></script>
 		</head>
@@ -29,13 +30,51 @@ templ Page(data DashboardData) {
 	</html>
 }
 
+// themeScript detects the stored light/dark preference (see
+// ThemeToggleButton) before first paint and stamps it onto <html> as
+// data-theme, so every page — dashboard, login, settings, onboarding — opens
+// in the theme the user last picked instead of flashing dark and then
+// flipping. Included in every full-page <head> (not just the dashboard's),
+// since the preference is app-wide, not a per-page setting. Unset defaults
+// to "dark" — the app's original, only appearance until a user opts into
+// light — rather than following the OS's own prefers-color-scheme.
+templ themeScript() {
+	<script>
+		(function() {
+			var theme = localStorage.getItem("healthd-theme") || "dark";
+			document.documentElement.setAttribute("data-theme", theme);
+		})();
+	</script>
+}
+
+// ThemeToggleButton flips data-theme on <html> and persists the choice —
+// both icons always render, CSS shows only the one matching the current
+// theme (see style.css's [data-theme] selectors on .theme-toggle), so
+// there's no server round-trip or Datastar signal needed for a purely
+// cosmetic, per-browser preference.
+templ ThemeToggleButton() {
+	<button
+		type="button"
+		class="theme-toggle"
+		title="Toggle light/dark theme"
+		onclick="var next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light'; document.documentElement.setAttribute('data-theme', next); localStorage.setItem('healthd-theme', next);"
+	>
+		<span class="theme-toggle-sun">
+			@iconSun()
+		</span>
+		<span class="theme-toggle-moon">
+			@iconMoon()
+		</span>
+	</button>
+}
+
 templ Header(username string) {
 	<header class="site-header">
-		<div class="brand">
+		<a href="/" class="brand">
 			<span class="brand-title">Personal Health Dashboard</span>
-		</div>
+		</a>
 		<nav class="site-nav">
-			<a href="/">Dashboard</a>
+			@ThemeToggleButton()
 			if username != "" {
 				<div class="user-menu">
 					<button
@@ -121,6 +160,11 @@ templ DayNav(data DashboardData) {
 			aria-hidden="true"
 		/>
 		<button class="day-nav-btn" data-on:click={ getExpr(viewURL(data.NextDay, data.View)) }>&rsaquo;</button>
+		if data.Day != data.Today {
+			<button class="day-nav-today-btn" data-on:click={ getExpr(viewURL(data.Today, data.View)) } title="Jump back to today">
+				Today
+			</button>
+		}
 		@SyncButton(data.Day, data.View, false)
 	</div>
 }

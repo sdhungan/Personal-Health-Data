@@ -1,3 +1,7 @@
+/* Dark theme (default — see the [data-theme="light"] block below for the
+   independently-tuned light variant; ThemeToggleButton in layout.templ
+   flips data-theme on <html> and persists the choice to localStorage,
+   themeScript applies it before first paint on every page). */
 :root {
   color-scheme: dark;
   --bg: #121212;
@@ -8,48 +12,124 @@
   --text-dim: #9a9a9a;
   --accent: #14b8a6;
   --danger: #e5484d;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 20px rgba(0, 0, 0, 0.22);
 
   /* Category accents — mirrors Apple Health's own section colors, used for
      each tile's icon badge, left accent, and any category-specific chart
-     marks (sleep stage segments, the step-goal ring). */
-  --cat-activity: #ff9f0a;
+     marks (sleep stage segments, the step-goal ring). Retuned from Apple
+     Health's raw hues to actually pass validate_palette.js against this
+     dark surface (see the dataviz skill): activity/respiratory/nutrition
+     were too light for the dark-mode OKLCH band (L 0.77-0.82, band is
+     0.48-0.67), and sleep/body sat close enough in hue (278 vs 312) that a
+     protan/tritan simulation collapsed them (OKLab dE 4.2, floor is 6) --
+     hue held, only lightness moved for every slot below. */
+  --cat-activity: #c86c00;
   --cat-heart: #ff375f;
-  --cat-body: #bf5af2;
-  --cat-sleep: #5e5ce6;
-  --cat-respiratory: #64d2ff;
-  --cat-nutrition: #32d74b;
+  --cat-body: #bd58f0;
+  --cat-sleep: #504ad2;
+  --cat-respiratory: #0c93be;
+  --cat-nutrition: #00a600;
+
+  /* Chart furniture that used to be hardcoded hex, not run through the
+     validator — goal-line was borderline against a light tile surface (2.78:1,
+     below the 3:1 floor) and stage-sedentary was actually failing against
+     THIS dark tile surface already (1.83:1) before this pass; both are now
+     variables so each theme gets its own checked value instead of one
+     hardcoded guess doing double duty. */
+  --goal-line: #4caf50;
+  --stage-sedentary: #7a7a80;
+}
+
+/* Light theme — a soft, cool off-white rather than pure #fff (harsh on a
+   big monitor, per the request), independently tuned against ITS OWN
+   surface (validate_palette.js run twice, once per mode — never an
+   automatic dark-mode flip, see the dataviz skill's own guidance on this). */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f6f8;
+  --tile-bg: #ffffff;
+  --tile-bg-hover: #eef1f4;
+  --border: #e2e6ea;
+  --text: #1c2128;
+  --text-dim: #667085;
+  --accent: #0f9c8c;
+  --danger: #dc2626;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 4px 12px rgba(16, 24, 40, 0.06);
+
+  --cat-activity: #c86c00;
+  --cat-heart: #b60027;
+  --cat-body: #b34ee6;
+  --cat-sleep: #463cc5;
+  --cat-respiratory: #0087b1;
+  --cat-nutrition: #008000;
+
+  --goal-line: #2e7d32;
+  --stage-sedentary: #48484a;
 }
 
 * { box-sizing: border-box; }
+
+/* One shared transition for every interactive control, rather than
+   redeclaring it per class — smooths both hover state changes and the
+   theme toggle (background/border/color all change together on switch). */
+.tile-expand-btn, .tile-collapse-btn, .day-nav-btn, .day-nav-label, .sync-btn,
+.day-nav-today-btn, .body-carry-btn, .view-tab, .user-menu-trigger, .theme-toggle,
+.user-menu-item, .brand {
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
 
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
   font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .site-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 24px;
+  padding: 14px 24px;
   border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+  z-index: 40;
 }
 
-.brand-title { font-size: 1.4rem; font-weight: 700; }
+.brand { display: flex; align-items: center; text-decoration: none; color: var(--text); }
+.brand-title { font-size: 1.15rem; font-weight: 700; }
 
-.site-nav a {
+.site-nav { display: flex; align-items: center; gap: 10px; }
+
+/* ---- Theme toggle ---- */
+
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--tile-bg);
+  border: 1px solid var(--border);
   color: var(--text-dim);
-  text-decoration: none;
-  margin-left: 16px;
+  cursor: pointer;
 }
-.site-nav a:hover { color: var(--text); }
+.theme-toggle:hover { color: var(--text); background: var(--tile-bg-hover); }
+/* Both icons are always in the DOM (see ThemeToggleButton); only the one
+   matching the current theme is shown, so toggling never needs a
+   server round-trip or a Datastar signal for a purely cosmetic,
+   per-browser preference. */
+.theme-toggle-moon { display: none; }
+:root[data-theme="light"] .theme-toggle-sun { display: none; }
+:root[data-theme="light"] .theme-toggle-moon { display: flex; }
 
 /* ---- User menu (avatar button + dropdown, replaces the old inline
    Settings/username/Log out row) ---- */
 
-.user-menu { position: relative; margin-left: 16px; }
+.user-menu { position: relative; }
 .user-menu-trigger {
   display: flex;
   align-items: center;
@@ -79,7 +159,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 6px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow);
 }
 .user-menu-name {
   padding: 8px 10px 10px;
@@ -136,6 +216,7 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
+  width: fit-content;
   margin-bottom: 20px;
   background: var(--tile-bg);
   border: 1px solid var(--border);
@@ -156,8 +237,7 @@ body {
 .day-nav-label {
   font-size: 1.05rem;
   font-weight: 600;
-  flex: 1;
-  text-align: left;
+  white-space: nowrap;
   background: none;
   border: none;
   color: var(--text);
@@ -182,7 +262,6 @@ body {
 }
 
 .sync-btn {
-  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -196,6 +275,22 @@ body {
 }
 .sync-btn:hover { color: var(--text); background: var(--tile-bg-hover); }
 .sync-btn:disabled { cursor: default; opacity: 0.7; }
+
+/* Only rendered when the selected day isn't today (see DayNav) — a quick
+   reset back to today's date instead of clicking the prev-day arrow
+   repeatedly or reopening the date picker. */
+.day-nav-today-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.day-nav-today-btn:hover { color: var(--text); background: var(--tile-bg-hover); }
 
 .icon-spin { animation: spin 1s linear infinite; }
 @keyframes spin {
@@ -232,7 +327,34 @@ body {
   min-height: 140px;
   display: flex;
   flex-direction: column;
+  box-shadow: var(--shadow);
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
+
+/* One compact, low-emphasis tile per section naming what had no data today
+   (see EmptySummaryTile in dashboard.templ) instead of either a full-size
+   empty tile per metric or the section silently vanishing. Dashed border
+   and no fill/accent mark it as "nothing here" at a glance, distinct from
+   every real data tile around it. */
+.tile-empty-summary {
+  grid-column: 1 / -1;
+  min-height: 0;
+  flex-direction: row;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 16px;
+  background: none;
+  border: 1px dashed var(--border);
+  box-shadow: none;
+}
+.tile-empty-summary-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.tile-empty-summary-list { font-size: 0.85rem; color: var(--text-dim); }
 .tile[data-category="activity"]     { --tile-accent: var(--cat-activity); }
 .tile[data-category="heart"]        { --tile-accent: var(--cat-heart); }
 .tile[data-category="body"]         { --tile-accent: var(--cat-body); }
@@ -311,7 +433,7 @@ body {
 .chart-axis-label { fill: var(--text-dim); font-size: 9px; }
 .chart-bar { fill: var(--tile-accent, var(--accent)); cursor: crosshair; }
 .chart-bar-label { fill: var(--text-dim); font-size: 9px; text-anchor: middle; }
-.chart-goal-line { stroke: #4caf50; stroke-dasharray: 4 3; }
+.chart-goal-line { stroke: var(--goal-line); stroke-dasharray: 4 3; }
 .chart-goal-label { fill: var(--text-dim); font-size: 9px; }
 .chart-line {
   fill: none;
@@ -342,7 +464,7 @@ body {
   font-size: 0.75rem;
   white-space: nowrap;
   pointer-events: none;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+  box-shadow: var(--shadow);
   z-index: 5;
 }
 .chart-tooltip-label { color: var(--text-dim); }
@@ -361,36 +483,36 @@ body {
 
 .stage-timeline { border-radius: 6px; overflow: hidden; }
 .stage-seg { cursor: crosshair; }
-.stage-awake    { fill: #ff9f0a; }
-.stage-light    { fill: #64d2ff; }
-.stage-deep     { fill: #5e5ce6; }
-.stage-rem      { fill: #bf5af2; }
-.stage-moderate { fill: #ff9f0a; }
-.stage-vigorous { fill: #ff375f; }
-.stage-peak     { fill: #e5484d; }
+.stage-awake    { fill: var(--cat-activity); }
+.stage-light    { fill: var(--cat-respiratory); }
+.stage-deep     { fill: var(--cat-sleep); }
+.stage-rem      { fill: var(--cat-body); }
+.stage-moderate { fill: var(--cat-activity); }
+.stage-vigorous { fill: var(--cat-heart); }
+.stage-peak     { fill: var(--danger); }
 
 /* Activity-level segments (watch_activity_level_segment) — an
    intensity ramp from resting gray up through red, distinct from the
    sleep-stage palette above since both can appear on the same page. */
-.stage-sedentary         { fill: #48484a; }
-.stage-lightly_active    { fill: #64d2ff; }
-.stage-moderately_active { fill: #ff9f0a; }
-.stage-very_active       { fill: #ff375f; }
+.stage-sedentary         { fill: var(--stage-sedentary); }
+.stage-lightly_active    { fill: var(--cat-respiratory); }
+.stage-moderately_active { fill: var(--cat-activity); }
+.stage-very_active       { fill: var(--cat-heart); }
 
 .stage-legend { display: flex; gap: 14px; margin-top: 8px; flex-wrap: wrap; }
 .stage-legend-item { display: flex; align-items: center; gap: 5px; font-size: 0.8rem; color: var(--text-dim); }
 .stage-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
-.stage-dot.stage-awake    { background: #ff9f0a; }
-.stage-dot.stage-light    { background: #64d2ff; }
-.stage-dot.stage-deep     { background: #5e5ce6; }
-.stage-dot.stage-rem      { background: #bf5af2; }
-.stage-dot.stage-moderate { background: #ff9f0a; }
-.stage-dot.stage-vigorous { background: #ff375f; }
-.stage-dot.stage-peak     { background: #e5484d; }
-.stage-dot.stage-sedentary         { background: #48484a; }
-.stage-dot.stage-lightly_active    { background: #64d2ff; }
-.stage-dot.stage-moderately_active { background: #ff9f0a; }
-.stage-dot.stage-very_active       { background: #ff375f; }
+.stage-dot.stage-awake    { background: var(--cat-activity); }
+.stage-dot.stage-light    { background: var(--cat-respiratory); }
+.stage-dot.stage-deep     { background: var(--cat-sleep); }
+.stage-dot.stage-rem      { background: var(--cat-body); }
+.stage-dot.stage-moderate { background: var(--cat-activity); }
+.stage-dot.stage-vigorous { background: var(--cat-heart); }
+.stage-dot.stage-peak     { background: var(--danger); }
+.stage-dot.stage-sedentary         { background: var(--stage-sedentary); }
+.stage-dot.stage-lightly_active    { background: var(--cat-respiratory); }
+.stage-dot.stage-moderately_active { background: var(--cat-activity); }
+.stage-dot.stage-very_active       { background: var(--cat-heart); }
 
 /* ---- Activities / workouts list ---- */
 
@@ -470,6 +592,7 @@ body {
   width: 90%;
   max-height: 80vh;
   overflow-y: auto;
+  box-shadow: var(--shadow);
 }
 .overlay-close {
   position: absolute;
@@ -558,7 +681,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 16px;
   padding: 28px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow);
 }
 
 .auth-page .body-form { flex-direction: column; align-items: stretch; gap: 16px; }
