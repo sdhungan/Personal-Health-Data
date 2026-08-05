@@ -19,9 +19,19 @@ import (
 // newMCPCmd runs a local stdio MCP server exposing Cronometer food
 // search/logging tools for one account — spawned as a subprocess by an MCP
 // host (Claude Code, Claude Desktop) rather than started as a standing
-// service, so it has no --action lifecycle flag unlike serve/root: its
-// lifecycle is owned entirely by whatever host spawns it. See
-// ARCHITECTURE.md's MCP connector section for the full design.
+// service, so it has no --action lifecycle flag unlike the merged
+// scheduler+dashboard process: its lifecycle is owned entirely by whatever
+// host spawns it. Deliberately stayed stdio rather than moving to an HTTP
+// route on the merged service (tried and reverted 2026-08-05, see
+// prerequisite.md): Claude Desktop's own config file only understands a
+// spawned command/args entry, not an arbitrary URL, so an HTTP transport
+// would have needed a separate bridge process (and a new runtime
+// dependency) for zero actual benefit — this was never one of the two
+// competing OS services the "merge everything into one process" work
+// (service.go) was actually about; it was already a per-session spawned
+// subprocess with no install/start/stop of its own, same as `healthd sync`
+// remains its own one-shot subcommand rather than folded into the merged
+// process. See ARCHITECTURE.md's MCP connector section for the full design.
 //
 // --user follows the exact pattern "healthd auth google/cronometer --user"
 // already established in auth.go: resolves a username to its account, then

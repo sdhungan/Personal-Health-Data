@@ -27,14 +27,29 @@ func newSyncCmd() *cobra.Command {
 				return runDumpToday(dumpTodayDir, dumpTodayUser)
 			}
 
-			if err := runGoogleHealthSyncOnce(context.Background()); err != nil {
+			ctx := context.Background()
+			key, err := crypto.LoadKey(appPaths.DBKeyFile())
+			if err != nil {
+				return fmt.Errorf("loading key material (run \"healthd db init\" first?): %w", err)
+			}
+			store, err := db.Open(appPaths.DBFile(), appPaths.DBWorkingFile(), key)
+			if err != nil {
+				return fmt.Errorf("opening database (run \"healthd db init\" first?): %w", err)
+			}
+			defer func() {
+				if cerr := store.Close(); cerr != nil {
+					fmt.Fprintln(os.Stderr, "warning: closing database:", cerr)
+				}
+			}()
+
+			if err := runGoogleHealthSyncOnce(ctx, store.DB()); err != nil {
 				return err
 			}
 			// Cronometer is deliberately independent of Google Health (see
 			// schema.sql) — a failure here (e.g. "healthd auth cronometer"
 			// never run) is logged, not fatal, so it never blocks the
 			// Google Health pass that already succeeded above.
-			if err := runCronometerSyncOnce(context.Background()); err != nil {
+			if err := runCronometerSyncOnce(ctx, store.DB()); err != nil {
 				fmt.Fprintln(os.Stderr, "cronometer sync error:", err)
 			}
 			return nil

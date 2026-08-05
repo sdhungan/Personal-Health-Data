@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/labstack/echo/v4"
+	"golang.org/x/oauth2"
 
 	"github.com/sdhungan/Personal-Health-Data/internal/cronometer"
 	"github.com/sdhungan/Personal-Health-Data/internal/googleauth"
@@ -115,53 +117,80 @@ func (s *Server) handleOnboardingPage(c echo.Context) error {
 	).Render(c.Request().Context(), c.Response())
 }
 
-// handleOnboardingConnectGoogle triggers connectGoogle from the onboarding
-// page and returns there afterward either way — /onboarding/connect stays
-// freely revisitable, so this is also how a provider skipped at signup
-// gets connected later.
+// handleOnboardingConnectGoogle starts the Google consent flow from the
+// onboarding page and immediately redirects the browser there — the flow
+// itself finishes asynchronously (see startGoogleConnect); the account
+// lands back on /onboarding/connect only once Google's own redirect
+// reaches the local callback listener. /onboarding/connect stays freely
+// revisitable, so this is also how a provider skipped at signup gets
+// connected later.
 func (s *Server) handleOnboardingConnectGoogle(c echo.Context) error {
-	ctx := c.Request().Context()
 	userID := webauth.CurrentUserID(c)
 
-	if err := s.connectGoogle(ctx, userID); err != nil {
+	authURL, err := s.startGoogleConnect(userID, "/onboarding/connect")
+	if err != nil {
 		c.Response().Header().Set(echo.HeaderContentType, echo.MIMETextHTMLCharsetUTF8)
-		return views.OnboardingPage(false, err.Error(), s.cronometerConnected(userID), "").Render(ctx, c.Response())
+		return views.OnboardingPage(false, err.Error(), s.cronometerConnected(userID), "").Render(c.Request().Context(), c.Response())
 	}
-	return c.Redirect(http.StatusFound, "/onboarding/connect")
+	return c.Redirect(http.StatusFound, authURL)
 }
 
-// connectGoogle runs the same local-browser OAuth consent flow "healthd
-// auth google" uses (internal/googleauth.RunConsentFlow), triggered from
-// the dashboard instead of a terminal — this only works because healthd's
-// browser and server are expected to be on the same machine (see
-// ARCHITECTURE.md §5). It blocks the request until the user approves (or
-// the flow times out), then saves the resulting token encrypted under this
-// user's own per-user path/key and activates their syncer immediately.
-// Shared by handleOnboardingConnectGoogle and
-// handleGoogleClientConnectAccount (settings.go) — connecting Google
-// Health isn't onboarding-only, same reasoning connectCronometer already
-// follows for Cronometer's ongoing account-settings card.
-func (s *Server) connectGoogle(ctx context.Context, userID int64) error {
+// startGoogleConnect starts the OAuth consent flow (internal/googleauth.
+// StartConsentFlow) and returns the URL to send the browser to right away
+// — the wait-for-callback step runs in its own goroutine instead of
+// blocking this request. Unlike the old connectGoogle this replaces, it
+// never tries to open a *new* browser window: that requires an attached
+// interactive desktop session, which a process running as an OS service
+// doesn't have (Session 0 on Windows has none at all) — the request came
+// from a browser tab that's already open, so redirecting it is both
+// simpler and the only thing that actually works headlessly. This is what
+// was silently hanging every "Connect Google Health" click until the flow
+// timed out (5 minutes) once the dashboard started running as an
+// installed service rather than an interactive process — see
+// prerequisite.md. successRedirect is where the browser lands after a
+// successful exchange (handleOnboardingConnectGoogle and
+// handleGoogleClientConnectAccount each pass their own page back).
+func (s *Server) startGoogleConnect(userID int64, successPath string) (authURL string, err error) {
 	clientJSON, err := s.googleClientJSON()
 	if err != nil {
-		return fmt.Errorf("%w. Visit /settings/google-client to upload one", err)
-	}
-	token, err := googleauth.RunConsentFlow(ctx, clientJSON, s.Config.Google.CallbackPort)
-	if err != nil {
-		return fmt.Errorf("connecting Google Health failed: %w", err)
+		return "", fmt.Errorf("%w. Visit /settings/google-client to upload one", err)
 	}
 
+	successRedirect := fmt.Sprintf("http://localhost:%d%s", s.Config.Port, successPath)
+	flow, err := googleauth.StartConsentFlow(clientJSON, s.Config.Google.CallbackPort, successRedirect)
+	if err != nil {
+		return "", fmt.Errorf("starting Google Health consent flow: %w", err)
+	}
+
+	go func() {
+		token, err := flow.Wait(context.Background())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "connecting Google Health failed for user %d: %v\n", userID, err)
+			return
+		}
+		if err := s.finishGoogleConnect(userID, token); err != nil {
+			fmt.Fprintf(os.Stderr, "saving Google Health token failed for user %d: %v\n", userID, err)
+		}
+	}()
+
+	return flow.AuthURL, nil
+}
+
+// finishGoogleConnect saves token under userID's own per-user path/key and
+// activates their syncer immediately — the second half of
+// startGoogleConnect, run from its background goroutine once the consent
+// flow's callback actually arrives.
+func (s *Server) finishGoogleConnect(userID int64, token *oauth2.Token) error {
 	if err := s.Paths.EnsureUserDir(userID); err != nil {
-		return fmt.Errorf("connecting Google Health failed: %w", err)
+		return err
 	}
 	key, err := webauth.CredentialKey(s.Paths, userID)
 	if err != nil {
-		return fmt.Errorf("connecting Google Health failed: %w", err)
+		return err
 	}
 	if err := googleauth.SaveToken(s.Paths.UserGoogleOAuthFile(userID), key, token); err != nil {
-		return fmt.Errorf("connecting Google Health failed: %w", err)
+		return err
 	}
-
 	s.setGoogleSyncer(userID, s.buildGoogleSyncer(userID)) // build now, using the token just saved, so it's picked up immediately
 	return nil
 }

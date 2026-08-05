@@ -1,23 +1,28 @@
 package views
 
-// GoogleClientSettingsPage lets any logged-in user upload/replace the
-// app-wide Google OAuth client JSON (client_id/client_secret) — a
-// one-per-deployment secret registered once in Google Cloud Console, not a
-// per-account credential — and, right below it, connect *this* account's
-// own Google Health via the real consent screen. The two live on one page
-// deliberately: fixing the client JSON and then connecting your own
-// account is exactly the two-step flow someone hits when "Connect Google
-// Health" first fails for missing-client reasons (see
-// handleOnboardingConnectGoogle's error, which links back here) — without
-// this section they'd have to navigate back to /onboarding/connect by hand
-// to finish. configured reports whether the app-wide client is on file;
+// GoogleClientSettingsPage shows the app-wide Google OAuth client JSON
+// (client_id/client_secret) status — a one-per-deployment secret
+// registered once in Google Cloud Console, not a per-account credential —
+// and, right below it, lets *this* account connect its own Google Health
+// via the real consent screen. lockedByFlag (web.GoogleClientLockedByFlag)
+// hides the upload form entirely once --google-client-secret has
+// successfully configured the client this run: the service argument is
+// meant to be the only place it changes at that point, so there's nothing
+// to upload here — just a note pointing back at the flag. When not locked
+// (the flag was empty, or invalid and logged as a warning — see
+// GoogleClientLockedByFlag's doc comment), the upload form stays available
+// as a fallback, same reasoning connectGoogle's error already gave someone
+// who hits "Connect Google Health" with nothing configured yet: without
+// this section they'd have no way to fix it short of restarting the
+// service with a flag. configured reports whether the app-wide client is
+// on file (regardless of whether it got there via the flag or this form);
 // googleConnected reports whether username's own account has a Google
 // Health token yet. successMsg is set right after either a fresh upload
 // (?uploaded=1) or a fresh account connection (?connected=1, see
 // handleGoogleClientSettingsPage) — shown as its own distinct banner so
 // neither action looks like a no-op afterward. errMsg surfaces a failure
 // from whichever of the two actions was just attempted.
-templ GoogleClientSettingsPage(configured bool, successMsg, errMsg string, username string, googleConnected bool) {
+templ GoogleClientSettingsPage(configured, lockedByFlag bool, successMsg, errMsg string, username string, googleConnected bool) {
 	<!DOCTYPE html>
 	<html lang="en">
 		<head>
@@ -36,8 +41,7 @@ templ GoogleClientSettingsPage(configured bool, successMsg, errMsg string, usern
 					per-account credential. Registered once at
 					<a href="https://console.cloud.google.com" target="_blank" rel="noopener">console.cloud.google.com</a>
 					(enable the Google Health API, create an OAuth client, download its
-					client JSON). Confirming an upload here replaces it for every
-					account on this healthd instance, immediately.
+					client JSON).
 				</p>
 
 				if successMsg != "" {
@@ -45,27 +49,35 @@ templ GoogleClientSettingsPage(configured bool, successMsg, errMsg string, usern
 				} else if configured {
 					<p class="body-saved-status">A client is currently configured.</p>
 				} else {
-					<p class="journal-error">No client configured yet — "Connect Google Health" won't work for any account until one is uploaded.</p>
+					<p class="journal-error">No client configured yet — "Connect Google Health" won't work for any account until one is set.</p>
 				}
 				if errMsg != "" {
 					<p class="journal-error">{ errMsg }</p>
 				}
 
-				<form method="post" action="/settings/google-client" enctype="multipart/form-data" class="body-form">
-					<div class="body-field">
-						<label for="client-json">Client JSON file</label>
-						<input id="client-json" name="client_json" type="file" accept="application/json" required/>
-					</div>
-					<div class="body-form-footer">
-						<button type="submit" class="body-carry-btn">
-							if configured {
-								Confirm &amp; Replace
-							} else {
-								Confirm &amp; Upload
-							}
-						</button>
-					</div>
-				</form>
+				if lockedByFlag {
+					<p>
+						Configured via the service's <code>--google-client-secret</code>
+						startup argument — that's the only place it can be changed now.
+						Restart the service with a different path to replace it.
+					</p>
+				} else {
+					<form method="post" action="/settings/google-client" enctype="multipart/form-data" class="body-form">
+						<div class="body-field">
+							<label for="client-json">Client JSON file</label>
+							<input id="client-json" name="client_json" type="file" accept="application/json" required/>
+						</div>
+						<div class="body-form-footer">
+							<button type="submit" class="body-carry-btn">
+								if configured {
+									Confirm &amp; Replace
+								} else {
+									Confirm &amp; Upload
+								}
+							</button>
+						</div>
+					</form>
+				}
 
 				<h2 class="brand-title" style="font-size:1.1rem">Your account's connection</h2>
 				if googleConnected {

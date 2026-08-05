@@ -63,30 +63,44 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
   handlers to read). See `ARCHITECTURE.md` §10.
 - **`internal/cli`** — Cobra command tree. `root.go` resolves `--root` once
   (`PersistentPreRunE`) into a shared `appPaths *paths.Paths` every
-  subcommand file (`sync.go`, `auth.go`, `db.go`, `serve.go`, `mcp.go`,
+  subcommand file (`sync.go`, `auth.go`, `db.go`, `mcp.go`,
   `googlehealthsync.go`, `cronometersync.go`, `service.go`) reads from.
-  `mcp.go` (`newMCPCmd`) follows `auth.go`'s exact `--user`/`resolveUserID`/
+  There is no more `serve.go` (2026-08-05) — merged into `service.go`'s
+  `runForegroundCtx`, which now opens one `*db.Store` and runs the web
+  dashboard (blocking main loop) alongside the sync scheduler (a
+  `time.Ticker` goroutine sharing that same connection); the two used to
+  need separate stores precisely because they were separate processes, and
+  running two independent `*db.Store` against the same working file
+  *inside one process* would race each other's checkpoint/close (see that
+  function's own doc comment). `mcp.go` (`newMCPCmd`) stayed a stdio
+  subcommand rather than joining the merge — tried as an HTTP route on the
+  merged process the same day and reverted: it was never one of the two
+  competing OS services the merge solved for (no `--action` lifecycle of
+  its own either way), and Claude Desktop's config can't reach an
+  arbitrary URL without a separate bridge process, so moving it bought
+  nothing. Follows `auth.go`'s exact `--user`/`resolveUserID`/
   `webauth.CredentialKey` pattern to build a `cronometer.DBSyncer` for one
   account, then hands it to `mcpserver.New(...).Run(...)` on a stdio
   transport — see `ARCHITECTURE.md` §11.
-  `googlehealthsync.go`/`cronometersync.go` each hold one
-  `run<Source>SyncOnce(ctx)` helper, called from both `sync.go` (one-shot
-  manual trigger) and `service.go`'s scheduler — the same function either
-  way, not duplicated. `service.go` also handles the
-  `--action=install/start/stop/uninstall` OS-service lifecycle for both the
-  scheduler (root `--action`) and the web dashboard (`serve --action`,
-  registered as a separate service, default names `healthDSafal`/
-  `healthDSafal-web`, both overridable via `--service-name`) via
-  `github.com/kardianos/service` — `newHostedService` builds the
-  registration, `runServiceAction`/`runServeServiceAction` call
-  `service.Control` for install/start/stop/uninstall, and
-  `runHostedScheduler`/`runHostedServe` are what actually run when the OS
-  service manager (not a terminal — `service.Interactive()` is false) starts
-  the installed service, driving `runForegroundCtx`/`runServeForegroundCtx`
-  through kardianos's own `Start`/`Stop` lifecycle instead of the plain
-  signal handling `runForeground`/`runServeForeground` use interactively.
-  **`serve` and the bare scheduler are two separate processes** — there's no
-  single command that runs both together yet (see `ARCHITECTURE.md` §2).
+  `googlehealthsync.go`/`cronometersync.go`
+  each hold one `run<Source>SyncOnce(ctx, conn *sql.DB)` helper, called
+  from both `sync.go` (one-shot manual trigger, its own store) and
+  `service.go`'s scheduler goroutine (the merged process's shared store) —
+  the same function either way, not duplicated; it takes an already-open
+  connection rather than opening its own; whichever caller owns the store
+  is responsible for closing it. `service.go` also handles the single
+  `--action=install/start/stop/uninstall` OS-service lifecycle (one
+  service, default name `healthDSafal`, overridable via `--service-name`)
+  via `github.com/kardianos/service` — `newHostedService` builds the
+  registration, `runServiceAction` calls `service.Control` for
+  install/start/stop/uninstall, and `runHostedService` is what actually
+  runs when the OS service manager (not a terminal —
+  `service.Interactive()` is false) starts the installed service, driving
+  `runForegroundCtx` through kardianos's own `Start`/`Stop` lifecycle
+  instead of the plain signal handling `runForeground` uses interactively.
+  Every intermediate startup/shutdown step is logged via `internal/applog`
+  (zap, `<root>/logs/healthd.log`, rotated past 1000 lines) — the only
+  record available once running as a hosted service with no console.
 - **`internal/paths`** — the *only* place that builds a path under `--root`
   (`DBFile()`, `ConfigFile()`, `KeysDir()`, etc.) — every other package asks
   this one rather than joining paths itself.
@@ -166,7 +180,26 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
   every tool handler just converts between `internal/cronometer`'s types and
   the tool's JSON in/out structs, serialized behind one `sync.Mutex` since
   an MCP client can fire concurrent tool calls but `DBSyncer` itself isn't
-  safe for that. See `ARCHITECTURE.md` §11.
+  safe for that. `consumerInstructions` (passed as `mcp.ServerOptions.Instructions`)
+  plus each tool's own `Description` spell out an explicit policy
+  (2026-08-05): `cronometer_search_food` is for a single specific/branded
+  item only; a described dish/meal must never be decomposed into
+  ingredients and searched/logged one at a time — the calling LLM estimates
+  the whole dish itself, confirms the ingredients/description with the
+  user first, then calls `cronometer_create_custom_food` exactly once for
+  the whole dish. This is instruction-level guidance the calling LLM has to
+  actually follow — an MCP tool call carries no notion of "the user already
+  confirmed this," so the Go server can't enforce it structurally. See
+  `ARCHITECTURE.md` §11. Run over stdio by `internal/cli/mcp.go` — moving
+  this to an HTTP route on the merged process was tried and reverted the
+  same day it was built (see that section's own note).
+- **`internal/applog`** — `New(logsDir, alsoStderr) (*zap.Logger, closeFn, error)`:
+  structured (JSON) logging to `<root>/logs/healthd.log`, tee'd to stderr
+  when running interactively. `rotatingWriter` archives the file under a
+  UTC-timestamp suffix and starts fresh once it exceeds 1000 lines —
+  checked on every write (not a separate timer), and re-derives its current
+  line count by re-scanning the file on open, so a restart doesn't reset
+  the count and delay rotation past what it should be.
 - **`internal/syncengine`** — `engine.go` (the day-completeness state
   machine: `pending → partial → complete/missing`, shared by every source),
   `sqlstore.go` (`sync_state` table read/write). `googlehealth.DBSyncer` and
@@ -240,7 +273,10 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
     (`handleMCPConnectorPage`), a static per-account page showing the
     `claude mcp add`/`.mcp.json` snippet to wire up `healthd mcp` for this
     account (built from `Server.ExecutablePath`, `Paths.Root()`, and the
-    logged-in username) — no entry form, see `ARCHITECTURE.md` §11.
+    logged-in username) — no entry form, see `ARCHITECTURE.md` §11. (An
+    HTTP-route version of this connector, with a bearer-token "Generate
+    token" action, was tried and reverted the same day — see that
+    section's own note on why.)
   - `data.go` — the Google-Health-side stat-tile data layer:
     `dashboardDailyRow` (embeds `healthdata.DailySummary` plus the Cronometer
     macro/energy columns the dashboard also shows — a web-layer composite,
@@ -290,8 +326,9 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
     fragments that patch into the shared overlay), `cronometer.templ`
     (account login card), `journal.templ`, `login.templ`/`signup.templ`
     (plain POST+redirect auth forms), `settings.templ` (Google OAuth client
-    upload page), `account.templ` (per-account settings + delete-account
-    form), `mcp_connector.templ` (Claude connector setup page, static),
+    status/upload page — upload form conditional on
+    `web.GoogleClientLockedByFlag`), `account.templ` (per-account settings +
+    delete-account form), `mcp_connector.templ` (Claude connector setup page, static),
     `connect_accounts.templ` (post-signup onboarding page),
     `icons.templ` (inline SVG icon set), `chart.go` (server-side SVG chart
     rendering — bar chart with optional goal line, line chart, and segment

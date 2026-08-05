@@ -72,6 +72,21 @@ CREATE TABLE web_session (
 
 CREATE INDEX idx_web_session_user ON web_session (user_id);
 
+-- Long-lived bearer token authenticating the MCP HTTP connector (see
+-- internal/webauth/mcptoken.go). Unlike web_session, this has no inactivity
+-- expiry: an MCP host (Claude Desktop) holds it in its own config and
+-- reconnects with it indefinitely, the same way it held a spawned "healthd
+-- mcp --user" command line before the connector moved from a stdio
+-- subprocess to an HTTP route on the always-on server. One token per user;
+-- generating a new one (see /settings/mcp-connector) replaces and
+-- invalidates the previous one. token_hash is SHA-256(raw token), the same
+-- non-recoverable-from-dump discipline as web_session.
+CREATE TABLE mcp_token (
+    user_id    INTEGER PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
 -- =============================================================================
 -- Reference / bookkeeping
 -- =============================================================================

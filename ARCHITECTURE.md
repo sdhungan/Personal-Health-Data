@@ -13,46 +13,41 @@ Built with Cobra, the binary exposes itself as one executable with subcommands i
 ```
 healthd [subcommand] [flags]
 
-healthd                    # foreground mode — runs the sync scheduler only
-                            # (every sync_interval_minutes, plus once
-                            # immediately on start), logging straight to
-                            # stdout/stderr. Does NOT serve the dashboard —
-                            # see the gap noted below.
+healthd [--google-client-secret <path>]  # foreground mode — runs EVERYTHING
+                            # as one process: the web dashboard (Echo +
+                            # Datastar) as the main loop, the sync scheduler
+                            # as a lightweight ticker goroutine, and the MCP
+                            # connector as a route on the same server (§11)
+                            # — logging straight to stdout/stderr as well as
+                            # <root>/logs/healthd.log (§4). --google-client-
+                            # secret is optional (see §5) — if given and
+                            # valid, it's the *only* way to (re)configure the
+                            # app-wide Google OAuth client for the rest of
+                            # this run; if empty or invalid, that's logged
+                            # as a warning and the dashboard's upload form
+                            # stays available as a fallback instead.
 
-healthd --action=install   # registers the scheduler as an OS service
+healthd --action=install   # registers this one process as an OS service
                             # (systemd unit on Linux, Windows Service via
                             # kardianos/service) so it survives reboots.
                             # --service-name overrides the registered name
-                            # (default "healthDSafal").
+                            # (default "healthDSafal"); --google-client-
+                            # secret, if given here, is baked into the
+                            # service's own re-invocation arguments, so it's
+                            # reapplied on every future start without
+                            # passing it again.
 healthd --action=start     # start/stop/uninstall the service installed
 healthd --action=stop      # above (internal/cli/service.go). Installing on
 healthd --action=uninstall # Windows requires an elevated/Administrator
                             # shell; on Linux, root or an equivalent
                             # systemd/sysv-managing user.
 
-healthd serve [--google-client-secret <path>]  # runs the web dashboard
-                                   # (Echo + Datastar). Does NOT run the
-                                   # sync scheduler — the dashboard's own
-                                   # Sync button is a manual per-day
-                                   # trigger instead. --google-client-secret
-                                   # is optional (see §5) — if given,
-                                   # re-saved as the app-wide Google OAuth
-                                   # client on every startup; if omitted,
-                                   # falls back to whatever's already
-                                   # configured.
-healthd serve --action=install    # same install/start/stop/uninstall
-healthd serve --action=start      # pattern as above, but registers the web
-healthd serve --action=stop       # dashboard as its OWN separate OS service
-healthd serve --action=uninstall  # (so it can restart independently of the
-                                   # scheduler service) — default name
-                                   # "healthDSafal-web", also overridable
-                                   # via --service-name.
-
 healthd sync                 # runs one ingestion pass immediately, both
                               # sources (Google Health, then Cronometer) —
                               # manual trigger, useful for testing or
-                              # "run it now" without waiting on `serve`'s
-                              # click-driven sync or the scheduler's interval.
+                              # "run it now" without waiting on the
+                              # dashboard's click-driven sync or the
+                              # scheduler's interval.
 
 healthd auth google          # runs the OAuth2 local-redirect flow for
                               # Google Health API access.
@@ -68,17 +63,13 @@ healthd db decrypt <out.sql>  # dumps the encrypted DB to a plaintext .sql
 
 healthd db init               # first-run: creates the DB, prompts for the
                                # encryption passphrase, writes folder structure
-
-healthd mcp --user <username>  # runs a local stdio MCP server exposing
-                                # Cronometer food search/logging tools for
-                                # one account — see §11.
 ```
 
-Why `--action` and not five distinct subcommands only? `install/start/stop/uninstall` are lifecycle actions on a service *registration*, so they're naturally flags on a `service` concept rather than top-level verbs — while `sync`, `auth`, and `db decrypt` are one-shot operations you run and watch finish, so they're plain subcommands. Splitting them this way keeps `healthd --help` from being a wall of near-duplicate service-management verbs mixed in with one-shot tools.
+There's no `healthd serve` or `healthd mcp` subcommand anymore (2026-08-05) — both used to be separate processes/services (the dashboard as its own service, the MCP connector as a stdio subprocess an MCP host spawned per session), merged into the one process above: a user account can only ever be created through the dashboard, the MCP connector can't authenticate without that account existing, and sync has nothing to do until that account has connected a provider, so the three were always fully order-dependent — splitting their *processes* bought no real isolation, just more things to install/start/stop/wire up. See §11 for how the MCP connector works now that it's an HTTP route instead of a subcommand.
 
-Why foreground-by-default instead of always logging to a file? Because the moment something's actually wrong, you want to watch it happen, not `tail -f` a log path you have to remember. The installed-service mode still writes to the structured log directory (§4) — foreground mode is purely for the "I'm sitting here debugging" case.
+Why `--action` and not a distinct subcommand? `install/start/stop/uninstall` are lifecycle actions on a service *registration*, so they're naturally flags on a `service` concept rather than top-level verbs — while `sync`, `auth`, and `db decrypt` are one-shot operations you run and watch finish, so they're plain subcommands. Splitting them this way keeps `healthd --help` from being a wall of near-duplicate service-management verbs mixed in with one-shot tools.
 
-**Known gap**: the bare `healthd` scheduler and `healthd serve`'s dashboard are still two separate processes — there's no single command that runs both together yet (`runForeground` in `internal/cli/service.go` has a literal `TODO: start the Echo+Datastar server alongside this scheduler`). Today, "always-on with auto-sync" means running both `healthd` and `healthd serve` at once; `serve` alone only syncs when the dashboard's Sync button is clicked.
+Why foreground-by-default instead of always logging to a file? Because the moment something's actually wrong, you want to watch it happen, not `tail -f` a log path you have to remember. Every run — foreground or hosted — also writes structured logs to `<root>/logs/healthd.log` (`internal/applog`, §4) with simple line-count rotation (archived past 1000 lines), so a hosted service with no attached console still has a record to check after the fact.
 
 ## 3. Data flow and the sync scheduler
 
@@ -132,8 +123,10 @@ A configurable root path (flag `--root`, default `~/.healthd/`) keeps everything
 │   ├── config.yaml           # ports, sync interval, root overrides
 │   └── google_oauth.json.enc # encrypted OAuth2 client credentials + tokens
 ├── logs/
-│   ├── sync.log               # rotated, one line per sync run + errors
-│   └── server.log
+│   └── healthd.log            # structured (zap/JSON), every startup/shutdown
+│                               # milestone + sync/connector errors — archived
+│                               # under a timestamp suffix past 1000 lines
+│                               # (internal/applog), a fresh file started
 ├── keys/
 │   └── db.key                # DB encryption key material, 0600 perms
 └── service/
@@ -146,7 +139,7 @@ The intent: nothing lives next to the binary itself, so upgrading `healthd` is j
 
 Google's Health API uses standard OAuth2 (authorization code flow), and involves two distinct credentials that are easy to conflate but serve different purposes and have different lifetimes:
 
-- **The OAuth *client*** (`client_id`/`client_secret`) identifies this healthd *deployment* to Google — registered once per Google Cloud project. It is an app-wide setting, not a per-account one: every account's own Google login authorizes through this same client. It's configured as the standard `client_secret_*.json` downloaded from Google Cloud Console, validated (`golang.org/x/oauth2/google.ConfigFromJSON` must actually parse it) before being encrypted with the root DB key and written to `config/google_oauth_client.json.enc` (see `internal/googleauth.SaveClientJSON`/`LoadClientJSON`). Three ways in, none mutually exclusive: `healthd serve --google-client-secret <path>` (optional — if given, re-saved from that path on every `serve` startup, so a fresh `--root` doesn't need a separate setup step; if omitted, `serve` just runs with whatever's already configured, or none yet), the one-off headless `healthd google-client set <path>`, or the dashboard's `/settings/google-client` upload form — the last of which also lets the *currently logged-in* account connect its own Google Health right there (not onboarding-only, see that page's own doc comment), which is the fix for the actual gap this surfaced: fixing the client JSON used to strand you with no way back to the per-account consent flow except navigating to `/onboarding/connect` by hand. An earlier version of this design used a `config.yaml` file-path field instead of any of these and deliberately dropped it in favor of the dashboard-upload flow (so setup wouldn't require filesystem access to wherever healthd runs) — `--google-client-secret` is a narrower, opt-in version of that same idea: convenient for a local single-user deployment where filesystem access was never actually the constraint, but never required, so a Cronometer-only or Google-Health-less workflow (e.g. the scratch-root testing pattern used throughout this project's own development) still starts `serve` with no Google setup at all.
+- **The OAuth *client*** (`client_id`/`client_secret`) identifies this healthd *deployment* to Google — registered once per Google Cloud project. It is an app-wide setting, not a per-account one: every account's own Google login authorizes through this same client. It's configured as the standard `client_secret_*.json` downloaded from Google Cloud Console, validated (`golang.org/x/oauth2/google.ConfigFromJSON` must actually parse it) before being encrypted with the root DB key and written to `config/google_oauth_client.json.enc` (see `internal/googleauth.SaveClientJSON`/`LoadClientJSON`). Two ways in, deliberately not equal (2026-08-05, replacing three previously-equal ways to set it, one of which — the dashboard upload form — could silently clobber what the other two had set): `--google-client-secret <path>` (optional — if given and valid, re-saved from that path on every startup, *and* the only place it can be changed from then on for that run: `web.GoogleClientLockedByFlag` hides and rejects `/settings/google-client`'s upload form once this succeeds, precisely so the client secret can't drift between "whatever's on the command line" and "whatever was last uploaded through a browser"), or the dashboard's `/settings/google-client` upload form (available only when the flag is empty, or was invalid — logged as a warning rather than a fatal startup error, so a typo'd path doesn't leave the account with zero way to configure it). The former headless `healthd google-client set <path>` CLI command was removed for the same reason: as a standalone one-off invocation, it had no way to know about (or respect) `GoogleClientLockedByFlag`, so it could silently overwrite a flag-configured client out from under a running service. The upload form also lets the *currently logged-in* account connect its own Google Health right there (not onboarding-only, see that page's own doc comment) — useful the moment the form is actually available, i.e. before a flag value has locked it.
 - **Each account's own OAuth *token*** (access + refresh) is obtained per user, through Google's own real consent screen at accounts.google.com — this is "logging in through Google," already true today, not something layered on separately:
   1. Clicking "Connect Google Health" (dashboard onboarding/settings, or `healthd auth google --user <name>`) starts a short-lived local HTTP listener (e.g. `localhost:9876/callback`) and opens the consent URL in the browser.
   2. After the user approves *their own* Google account access, Google redirects to that local callback with an auth code; the binary exchanges it for an access + refresh token and immediately shuts the listener down.
@@ -232,13 +225,17 @@ As of 2026-08-02, `healthd` supports multiple independent accounts sharing one e
 
 `healthd mcp --user <username>` (`internal/cli/mcp.go`) runs a local **stdio** MCP server exposing Cronometer food search/logging tools (`internal/mcpserver`, backed by `internal/cronometer`'s `DBSyncer` action methods in `actions.go`). It's how food gets logged by describing a meal — or a photo of one — to Claude in an ordinary chat, using whatever Claude subscription is already paid for, instead of building a chat UI into this dashboard that would need its own separate, metered API key.
 
-**Why stdio, not a network server.** An MCP host (Claude Code, Claude Desktop) spawns `healthd mcp` as a subprocess and talks to it over stdin/stdout — there is no listening port, nothing reachable from outside this machine. This is the same posture as §1's whole premise: no third party sits between the data and the person, and a local-only connector is the version of "connect Claude to my data" that doesn't compromise that. The alternative (a network-reachable MCP endpoint) was never seriously considered — it would be a new attack surface for a single-user local tool that has no other listener except the dashboard itself.
+**Why stdio, not a network server** (reaffirmed 2026-08-05, after actually trying HTTP and reverting it the same day). An MCP host (Claude Code, Claude Desktop) spawns `healthd mcp` as a subprocess and talks to it over stdin/stdout — there is no listening port, nothing reachable from outside this machine. This is the same posture as §1's whole premise: no third party sits between the data and the person, and a local-only connector is the version of "connect Claude to my data" that doesn't compromise that. An HTTP route on the merged process (§2) was tried, since "one binary" briefly seemed to imply the connector should be a goroutine of it too — but that wasn't actually true: the connector was never one of the two OS services the merge was solving for (it has no `--action` lifecycle of its own regardless of transport, see below), and moving it to HTTP bought nothing but a new problem — Claude Desktop's own config file only understands a spawned `command`/`args` entry, not an arbitrary URL, so reaching an HTTP route from Claude Desktop needs a separate bridge process (`mcp-remote`, itself a new Node.js dependency) for zero actual benefit. Reverted the same day back to stdio, keeping only what that detour actually improved: the dish-vs-single-item tool policy below, which lives entirely in `internal/mcpserver` and is identical either way.
 
-**No LLM call happens in Go, anywhere in this feature.** The calling Claude session does 100% of the food identification and nutrient estimation itself, in its own turn — that's the entire point of piggybacking on a chat subscription instead of paying per token from server code. `internal/mcpserver`'s tools are deliberately "dumb": search Cronometer's real food database (`cronometer_search_food`, wrapping the `find_food`/`get_foods` endpoints), log a matched serving (`cronometer_log_serving`), fall back to defining a new food only when nothing reasonable matched (`cronometer_create_custom_food`), read back what's already logged for a day straight from Cronometer's live API rather than the locally-synced tables (`cronometer_get_diary` — the local `cronometer_serving` table is only as fresh as the last scheduled sync, which wouldn't yet reflect something logged moments earlier in the same chat), and undo a mistaken log (`cronometer_delete_serving`). Preferring a real search match over creating a new custom food per item is stated explicitly in the search tool's own description, since that's what Claude reads to decide which tool to reach for.
+**No LLM call happens in Go, anywhere in this feature.** The calling Claude session does 100% of the food identification and nutrient estimation itself, in its own turn — that's the entire point of piggybacking on a chat subscription instead of paying per token from server code. `internal/mcpserver`'s tools are deliberately "dumb": search Cronometer's real food database (`cronometer_search_food`, wrapping the `find_food`/`get_foods` endpoints), log a matched serving (`cronometer_log_serving`), define a new food (`cronometer_create_custom_food`), read back what's already logged for a day straight from Cronometer's live API rather than the locally-synced tables (`cronometer_get_diary` — the local `cronometer_serving` table is only as fresh as the last scheduled sync, which wouldn't yet reflect something logged moments earlier in the same chat), and undo a mistaken log (`cronometer_delete_serving`).
+
+**Dish vs. single item is a deliberate, explicit policy, not left to guesswork** (2026-08-05, replacing an earlier "always search first" instruction that caused a described multi-component dish to get decomposed into its ingredients and logged as several separate entries — not what was wanted). `mcp.NewServer`'s `Instructions` (`consumerInstructions` in `internal/mcpserver/server.go`) and each tool's own description now draw the line explicitly: `cronometer_search_food` is for a single, specific, likely-branded or well-known item only ("a banana", "Maltesers") — prefer a real database match there. A described dish or meal with more than one component (or a photo of a plated meal) must NOT be decomposed and searched ingredient-by-ingredient; instead the calling LLM estimates the whole dish's nutrition itself, confirms the ingredients/description it understood with the user first (never skip this for a photo, where what's actually in the dish is a guess until confirmed), then calls `cronometer_create_custom_food` exactly once for the whole dish (named for the dish, e.g. "Pasta with homemade arrabiata sauce and chicken/pork mince sausage") before logging it. This is instruction-level guidance, not something the Go server can structurally enforce — an MCP tool call carries no notion of "the user already confirmed this in chat" — so it depends on the calling LLM actually following the tool descriptions/instructions, the same as every other behavioral contract in this feature (e.g. `cronometer_delete_serving`'s "use for correcting a mistake, not arbitrary cleanup"). See `references/log-food` skill (or whatever it's named once created) for a stronger, explicitly-invoked reinforcement of this same policy, for when relying on tool descriptions alone isn't reliable enough.
 
 **Auth reuses the multi-user credential model exactly, adds nothing new.** `--user <username>` resolves to an account id the same way `healthd auth google/cronometer --user` already does (`resolveUserID` in `internal/cli/users.go`), then loads that account's per-user credential key via `webauth.CredentialKey` — the identical key the background sync scheduler already uses to decrypt that user's saved Cronometer credentials unattended (see §10's "two encryption layers" paragraph). There's no new secret, no new prompt: `healthd mcp` only works for an account that already ran `healthd auth cronometer --user <name>` (or connected Cronometer from the dashboard) beforehand, and reuses `cronometer.DBSyncer`'s existing login/session-refresh machinery (`withRetry`) rather than reimplementing it.
 
-**One process, one account, no `--action` lifecycle.** Unlike `serve`/the root scheduler, `healthd mcp` has no install/start/stop/uninstall story — its lifecycle is owned entirely by whatever MCP host spawned it. `/settings/mcp-connector` in the dashboard (`internal/web/mcp_connector.go`) is a purely static, per-account page showing the exact `claude mcp add`/`.mcp.json` snippet to wire it up — not an entry form or a chat UI; all natural-language/photo input happens in the MCP host's own chat.
+**One process, one account, no `--action` lifecycle.** Unlike the merged scheduler+dashboard process, `healthd mcp` has no install/start/stop/uninstall story — its lifecycle is owned entirely by whatever MCP host spawned it, same as before and after the HTTP detour above. `/settings/mcp-connector` in the dashboard (`internal/web/mcp_connector.go`) is a purely static, per-account page showing the exact `claude mcp add`/`.mcp.json` snippet to wire it up — not an entry form or a chat UI; all natural-language/photo input happens in the MCP host's own chat.
+
+**A `mcp_token` table exists in schema.sql/migrations.go but is currently unused** — leftover schema from the HTTP detour above. Left in place rather than retroactively deleting a migration that had already shipped against a real database with real user data by the time it was reverted (see migrations.go's own doc comment on why migrations are append-only once that's true) — harmless unused schema, not a functional issue. The Go code that read/wrote it (`internal/webauth.CreateMCPToken`/`LookupMCPToken`/`HasMCPToken`) was removed since dead code doesn't get the same append-only justification a shipped migration does.
 
 **Meal categorization is a time default, not an API field.** `cronometer_log_serving` accepts an optional `meal` (breakfast/lunch/dinner/snack) purely as a fallback for picking a default clock time when the caller doesn't give one explicitly (`mealDefaultTimes` in `internal/mcpserver/server.go`) — Cronometer's own app buckets diary entries into meal groups by time of day against boundaries configured in the account's own settings, not an explicit per-entry field (confirmed absent from the real `add_serving`/`get_diary` shapes this client is built against; see `cronometer-integration.md`'s "Known gaps"). This is a best-effort approximation of Cronometer's stock default boundaries, not a guarantee for an account with customized meal times.
 

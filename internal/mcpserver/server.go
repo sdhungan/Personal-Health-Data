@@ -23,41 +23,86 @@ import (
 	"github.com/sdhungan/Personal-Health-Data/internal/cronometer"
 )
 
+// consumerInstructions is the server-level policy every cronometer_* tool's
+// own description reinforces — surfaced to the connecting MCP client (e.g.
+// Claude) as usage guidance for this whole tool set, not just one tool.
+// This exists specifically to stop a described *dish* ("pasta with
+// homemade arrabiata sauce and chicken/pork mince sausage") from being
+// decomposed into its parts and searched/logged one ingredient at a time —
+// the earlier behavior this replaces — in favor of one estimated custom
+// food for the whole dish, confirmed with the user first. cronometer_search_food
+// still comes first, but only for a single specific/branded item likely to
+// already exist verbatim in Cronometer's database (a "Maltesers", a named
+// branded product, a plain single ingredient like "a banana") — not as a
+// per-ingredient decomposition step for a described meal.
+const consumerInstructions = `Two different situations call for two different tools, and mixing them up is the most common mistake:
+
+1. A SINGLE, SPECIFIC, LIKELY-BRANDED OR WELL-KNOWN ITEM ("a banana", "Maltesers", "a can of Coke", "a Snickers bar"):
+   Call cronometer_search_food first. Prefer a real database match over cronometer_create_custom_food — these almost
+   always already exist in Cronometer's database verbatim.
+
+2. A DESCRIBED DISH OR MEAL (anything with more than one component, or a photo of a plated meal —
+   "pasta with homemade arrabiata sauce and chicken/pork mince sausage", "chicken stir-fry with rice"):
+   Do NOT decompose it into ingredients and search/log each one separately — that is the wrong approach even though
+   cronometer_search_food would technically return matches for "pasta" or "sausage" individually. Instead:
+     a. First restate what you understood (the ingredients/components you're seeing or were told) back to the user
+        and wait for their confirmation or correction — especially important when working from a photo, since your
+        read of what's actually in the dish is a guess until they confirm it. Do not call any Cronometer write tool
+        (cronometer_create_custom_food or cronometer_log_serving) before this confirmation.
+     b. Once confirmed, estimate the dish's nutrition yourself, as one whole item — you are the one doing the
+        estimation here, not Cronometer's database.
+     c. Call cronometer_create_custom_food exactly once, with a clear, specific name for the whole dish (e.g. "Pasta
+        with homemade arrabiata sauce and chicken/pork mince sausage"), not once per ingredient.
+     d. Then log it with cronometer_log_serving.
+   The end result should be one diary entry for the dish, not several entries for its ingredients.`
+
 // New builds an MCP server exposing every cronometer_* tool, bound to one
 // already-constructed syncer (see internal/cli/mcp.go — one DBSyncer per
 // process, scoped to a single --user). Tool names are prefixed
 // "cronometer_" since this process will very plausibly run alongside other
 // MCP servers in the same Claude Code/Desktop session.
 func New(syncer *cronometer.DBSyncer) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "healthd-cronometer", Version: "0.1.0"}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "healthd-cronometer", Version: "0.1.0"}, &mcp.ServerOptions{
+		Instructions: consumerInstructions,
+	})
 	r := &registrar{syncer: syncer}
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "cronometer_search_food",
-		Description: "Search Cronometer's own food database by name. Always call this first for anything the user " +
-			"describes eating or drinking — prefer a real match here over cronometer_create_custom_food. Returns up " +
-			"to `limit` candidates with per-100g nutrients and available measures so you can judge the best " +
-			"nutritional match and compute the right gram amount from what was described (or from a photo).",
+		Description: "Search Cronometer's own food database by name — for a SINGLE, SPECIFIC, likely-branded or " +
+			"well-known item only (a named product, a plain single ingredient). Do NOT use this to decompose a " +
+			"described dish/meal into its ingredients and search each one — see this server's own instructions for " +
+			"the dish-vs-single-item policy; a multi-component dish should become one cronometer_create_custom_food " +
+			"call instead, never several cronometer_search_food + cronometer_log_serving calls per ingredient. " +
+			"Returns up to `limit` candidates with per-100g nutrients and available measures so you can judge the " +
+			"best nutritional match and compute the right gram amount.",
 	}, r.searchFood)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "cronometer_log_serving",
 		Description: "Log a serving of a food already identified via cronometer_search_food (or " +
-			"cronometer_create_custom_food) to the Cronometer diary. grams is the actual amount consumed — the " +
-			"measure is mostly cosmetic bookkeeping, not what controls the logged quantity. day/time default to " +
-			"right now in the account's own Cronometer timezone if omitted; meal (breakfast/lunch/dinner/snack) can " +
-			"be given instead of an explicit time to pick a sensible default — ask the user which meal this was if " +
-			"it's not obvious from context. Also refreshes the healthd dashboard's local mirror for that day, so it " +
-			"shows up there without a manual sync.",
+			"cronometer_create_custom_food) to the Cronometer diary. For a described dish (as opposed to a single " +
+			"item matched via search), only call this after the user has confirmed the ingredients/description you " +
+			"understood and after you've already created one custom food for the whole dish — never before that " +
+			"confirmation, and never once per ingredient. grams is the actual amount consumed — the measure is " +
+			"mostly cosmetic bookkeeping, not what controls the logged quantity. day/time default to right now in " +
+			"the account's own Cronometer timezone if omitted; meal (breakfast/lunch/dinner/snack) can be given " +
+			"instead of an explicit time to pick a sensible default — ask the user which meal this was if it's not " +
+			"obvious from context. Also refreshes the healthd dashboard's local mirror for that day, so it shows up " +
+			"there without a manual sync.",
 	}, r.logServing)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "cronometer_create_custom_food",
-		Description: "Fallback only — use this when cronometer_search_food found no reasonable match. Defines a " +
-			"new food in the account's own Cronometer database with the nutrient values you estimate (per 100g of " +
-			"the food), then returns its food_id/measure_id so you can log it via cronometer_log_serving exactly " +
-			"like a real database match. Don't use this for common foods that almost certainly already exist in " +
-			"Cronometer's database.",
+		Description: "Defines a new food in the account's own Cronometer database with the nutrient values you " +
+			"estimate (per 100g of the food), then returns its food_id/measure_id so you can log it via " +
+			"cronometer_log_serving exactly like a real database match. This is the PRIMARY tool for a described " +
+			"dish/meal with more than one component — name it for the whole dish (e.g. \"Pasta with homemade " +
+			"arrabiata sauce and chicken/pork mince sausage\"), called exactly once per dish, not once per " +
+			"ingredient — see this server's own instructions. Only call this after the user has confirmed the " +
+			"ingredients/description you understood, particularly when working from a photo. Also the fallback for " +
+			"a single item cronometer_search_food found no reasonable match for. Don't use this for a common " +
+			"single item that almost certainly already exists in Cronometer's database — search for that instead.",
 	}, r.createCustomFood)
 
 	mcp.AddTool(s, &mcp.Tool{

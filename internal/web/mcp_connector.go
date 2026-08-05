@@ -12,7 +12,7 @@ import (
 // handleMCPConnectorPage serves a static, per-account page explaining how
 // to wire this healthd instance into Claude Code/Desktop as a local MCP
 // server (see internal/cli/mcp.go, internal/mcpserver) — purely
-// visualization/setup info, no entry form, no chat UI: all natural-
+// visualization/setup info, no entry form: all natural-
 // language/photo food logging happens in the MCP host's own chat, not in
 // this dashboard (see ARCHITECTURE.md's MCP connector section for why).
 // Per-account (not app-wide like /settings/google-client) because the

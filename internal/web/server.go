@@ -113,6 +113,23 @@ func New(store *db.Store, p *paths.Paths, cfg *config.Config, rootKey crypto.Key
 	return s
 }
 
+// GoogleClientLockedByFlag reports whether the app-wide Google OAuth
+// client was successfully configured this run via the root command's
+// --google-client-secret argument (set once, directly, from
+// internal/cli's runForegroundCtx right after a valid path is applied).
+// When true, the dashboard's /settings/google-client upload form is
+// hidden and its POST handler refuses outright — the service argument is
+// meant to be the only place this ever changes once it's working, per an
+// explicit request to prevent the client secret from silently drifting
+// between "whatever's on the command line" and "whatever was last
+// uploaded through a browser." When false — the flag was empty, or
+// pointed at a file that failed to load/parse (logged as a warning by the
+// caller, which treats an invalid flag the same as no flag at all rather
+// than refusing to start) — the upload form stays available as a
+// bootstrap/fallback path, so a missing or bad flag value never leaves an
+// account with zero way to configure it.
+var GoogleClientLockedByFlag bool
+
 // googleClientJSON loads the app-wide Google OAuth client JSON (see
 // RootKey's doc comment). Returns googleauth.ErrMissingClientCredentials
 // if none has been uploaded yet — callers show that as an actionable
@@ -212,11 +229,14 @@ func (s *Server) cronometerConnected(userID int64) bool {
 }
 
 // Start runs the HTTP server on addr until ctx is canceled, then shuts
-// down gracefully (in-flight requests get a grace period), checkpoints,
-// and cleanly closes the database before returning. A best-effort final
-// checkpoint also happens if the server exits some other way (e.g. a
-// listener error) so a crash loses at most the last checkpoint interval,
-// not the whole session.
+// down gracefully (in-flight requests get a grace period) before
+// returning. Deliberately does NOT close the underlying store — callers
+// running other goroutines against the same connection (the merged
+// process's sync scheduler, see internal/cli/service.go) need to wait for
+// those to actually stop before it's safe to close it; Start closing the
+// store itself would race an in-flight sync query against Store.Close's
+// checkpoint+close. The caller owns that final Close, once, after every
+// goroutine sharing this connection has stopped.
 func (s *Server) Start(ctx context.Context, addr string) error {
 	serveErr := make(chan error, 1)
 	go func() {
@@ -259,11 +279,5 @@ loop:
 		}
 	}
 
-	if err := s.store.Close(); err != nil {
-		if runErr != nil {
-			return fmt.Errorf("%w (also failed to close database: %v)", runErr, err)
-		}
-		return fmt.Errorf("closing database: %w", err)
-	}
 	return runErr
 }

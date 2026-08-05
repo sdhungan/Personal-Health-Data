@@ -9,38 +9,22 @@ import (
 	"time"
 
 	"github.com/sdhungan/Personal-Health-Data/internal/cronometer"
-	"github.com/sdhungan/Personal-Health-Data/internal/crypto"
-	"github.com/sdhungan/Personal-Health-Data/internal/db"
 	"github.com/sdhungan/Personal-Health-Data/internal/syncengine"
 	"github.com/sdhungan/Personal-Health-Data/internal/webauth"
 )
 
-// runCronometerSyncOnce opens the encrypted database once, then fans out
-// one short-lived goroutine per user who has connected Cronometer (has
-// saved credentials under their own per-user path), each running one
-// day-completeness sync pass and exiting. Mirrors
+// runCronometerSyncOnce fans out one short-lived goroutine per user who has
+// connected Cronometer (has saved credentials under their own per-user
+// path), each running one day-completeness sync pass and exiting. Mirrors
 // runGoogleHealthSyncOnce (googlehealthsync.go) — the two sources are
 // deliberately independent (schema.sql: "a Cronometer outage/breakage
 // never touches watch data or vice versa"), so callers should treat a
 // Cronometer failure as non-fatal to an overall sync pass, same as this
-// package already does in sync.go/service.go.
-func runCronometerSyncOnce(ctx context.Context) error {
-	key, err := crypto.LoadKey(appPaths.DBKeyFile())
-	if err != nil {
-		return fmt.Errorf("loading key material (run \"healthd db init\" first?): %w", err)
-	}
-
-	store, err := db.Open(appPaths.DBFile(), appPaths.DBWorkingFile(), key)
-	if err != nil {
-		return fmt.Errorf("opening database (run \"healthd db init\" first?): %w", err)
-	}
-	defer func() {
-		if cerr := store.Close(); cerr != nil {
-			fmt.Fprintln(os.Stderr, "warning: closing database:", cerr)
-		}
-	}()
-
-	userIDs, err := allUserIDs(ctx, store.DB())
+// package already does in sync.go/service.go. conn is always the caller's
+// own already-open database connection — see runGoogleHealthSyncOnce's doc
+// comment for why this function never opens (or closes) one itself.
+func runCronometerSyncOnce(ctx context.Context, conn *sql.DB) error {
+	userIDs, err := allUserIDs(ctx, conn)
 	if err != nil {
 		return fmt.Errorf("listing users: %w", err)
 	}
@@ -55,7 +39,7 @@ func runCronometerSyncOnce(ctx context.Context) error {
 		wg.Add(1)
 		go func(userID int64) {
 			defer wg.Done()
-			if err := syncCronometerForUser(ctx, store.DB(), userID, credPath); err != nil {
+			if err := syncCronometerForUser(ctx, conn, userID, credPath); err != nil {
 				fmt.Fprintf(os.Stderr, "cronometer sync error (user %d): %v\n", userID, err)
 			}
 		}(userID)

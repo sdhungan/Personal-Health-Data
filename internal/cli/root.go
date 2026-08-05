@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	rootFlag        string
-	actionFlag      string
-	serviceNameFlag string
+	rootFlag           string
+	actionFlag         string
+	serviceNameFlag    string
+	googleClientSecret string
 
 	appPaths *paths.Paths
 )
@@ -50,14 +51,14 @@ func newRootCmd() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&rootFlag, "root", "", `root directory for all healthd state (default "~/.healthd")`)
 	cmd.Flags().StringVar(&actionFlag, "action", "", "service lifecycle action: install, start, stop, uninstall")
 	cmd.Flags().StringVar(&serviceNameFlag, "service-name", "", fmt.Sprintf(
-		"OS service name to install/start/stop/uninstall the sync scheduler under (default %q)", defaultServiceName))
+		"OS service name to install/start/stop/uninstall healthd under (default %q)", defaultServiceName))
+	cmd.Flags().StringVar(&googleClientSecret, "google-client-secret", "",
+		"path to the Google OAuth client_secret_*.json downloaded from Google Cloud Console — if given and valid, this is the ONLY way to (re)configure the app-wide Google OAuth client (see web.GoogleClientLockedByFlag); if empty or invalid, that's logged as a warning and /settings/google-client's upload form stays available as a fallback instead")
 
 	cmd.AddCommand(newSyncCmd())
 	cmd.AddCommand(newAuthCmd())
 	cmd.AddCommand(newDBCmd())
-	cmd.AddCommand(newServeCmd())
 	cmd.AddCommand(newUserCmd())
-	cmd.AddCommand(newGoogleClientCmd())
 	cmd.AddCommand(newMCPCmd())
 
 	return cmd
@@ -69,15 +70,15 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		name = defaultServiceName
 	}
 	if actionFlag != "" {
-		return runServiceAction(actionFlag, name)
+		return runServiceAction(actionFlag, name, googleClientSecret)
 	}
 	// service.Interactive() is false when this process was launched by the
 	// OS service manager (systemd/sysv on Linux, the SCM on Windows) rather
-	// than run directly from a terminal — see runHostedScheduler's doc
+	// than run directly from a terminal — see runHostedService's doc
 	// comment for why that path needs kardianos's own Run() instead of
 	// runForeground()'s plain signal handling.
 	if !service.Interactive() {
-		return runHostedScheduler(name)
+		return runHostedService(name, googleClientSecret)
 	}
-	return runForeground()
+	return runForeground(googleClientSecret)
 }

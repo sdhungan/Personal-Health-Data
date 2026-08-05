@@ -218,6 +218,44 @@ func TestCloseLeavesSharedWorkingFileIntactWhenStillOpen(t *testing.T) {
 	}
 }
 
+// TestMigrationAddsMCPTokenTable is a regression test for the migration
+// mechanism itself (migrations.go's Migrations list was empty until this
+// entry — see its doc comment) — simulates a database that predates the
+// mcp_token migration by dropping the table Init already created and
+// rolling PRAGMA user_version back, then confirms migrate() recreates it.
+func TestMigrationAddsMCPTokenTable(t *testing.T) {
+	dir := t.TempDir()
+	encPath := filepath.Join(dir, "health.db.enc")
+	workPath := filepath.Join(dir, ".health.db.work")
+	key := testKey(t)
+
+	if err := Init(encPath, workPath, key); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	store, err := Open(encPath, workPath, key)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := store.DB().Exec(`DROP TABLE mcp_token`); err != nil {
+		t.Fatalf("dropping mcp_token to simulate a pre-migration database: %v", err)
+	}
+	if _, err := store.DB().Exec(`PRAGMA user_version = 0`); err != nil {
+		t.Fatalf("resetting schema version: %v", err)
+	}
+
+	if err := store.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	var name string
+	err = store.DB().QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mcp_token'`).Scan(&name)
+	if err != nil {
+		t.Fatalf("mcp_token table missing after migration: %v", err)
+	}
+}
+
 func TestOpenRecoversFromUncleanShutdown(t *testing.T) {
 	dir := t.TempDir()
 	encPath := filepath.Join(dir, "health.db.enc")

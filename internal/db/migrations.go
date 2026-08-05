@@ -11,11 +11,16 @@ package db
 // len(Migrations), skipping this list entirely — these are only for
 // upgrading a database that already has data in it.
 //
-// Empty as of the watch_* schema redesign (see ARCHITECTURE.md's "Data
-// model: five fixed representation shapes" section, and prerequisite.md):
-// this project is still in early development with no real deployed
-// database to preserve, so that redesign went straight into schema.sql
-// instead of an upgrade path — re-run "healthd db init" against a fresh
-// root rather than migrating an old one. The mechanism itself stays ready
-// for real migrations once this matters (a real user's data on disk).
-var Migrations = []string{}
+// First real migration (2026-08-05): adds mcp_token, needed for the MCP
+// connector's move from a spawned stdio subprocess to an HTTP route on the
+// always-on server (see internal/webauth/mcptoken.go, internal/web/mcp.go).
+// Unlike the watch_* schema redesign noted below, this one runs as a real
+// migration rather than "just re-init a fresh root" — a root can already
+// have real synced data and user accounts in it by the time this ships.
+var Migrations = []string{
+	`CREATE TABLE mcp_token (
+		user_id    INTEGER PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+		token_hash TEXT NOT NULL UNIQUE,
+		created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+	)`,
+}
