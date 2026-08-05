@@ -117,16 +117,32 @@ account:
   original DOCUMENTED guess assumed. `Client.AddServing` now returns
   `int64`, matching `DiaryEntry.ServingID`'s type on the read side exactly
   — there is no read/write type asymmetry here after all, just a wrong
-  initial guess. `DiaryEntryRef.ServingID` (the `delete_entries` input) is
-  `int64` too, for consistency, though that specific field's real wire
-  shape hasn't been independently exercised yet (see below).
-- **`delete_entries`**: still not actually confirmed end to end. The
-  verification run that would have reached it failed one step earlier, at
-  the `add_serving` decode bug above; the throwaway custom food + serving
-  it created were cleaned up manually via the Cronometer app instead of
-  through this code path. Treat `DeleteEntries`/`DiaryEntryRef` as
-  DOCUMENTED, not CONFIRMED, until a clean `cmd/cronoverify` pass actually
-  reaches and exercises it.
+  initial guess.
+- **`delete_entries`** (CONFIRMED 2026-08-06, live, against a real diary
+  entry the user manually added specifically to test deletion): found and
+  fixed a second real bug, this one costing more than a type mismatch. The
+  original DOCUMENTED shape sent a hand-reconstructed
+  `{servingId, foodId, measureId, grams}` object — Cronometer's real v3
+  endpoint rejected it outright with `HTTP 400: Not able to deserialize
+  data provided`. Checking the reference project's actual source (not just
+  its README) showed why: its own `delete_entries` re-sends the **full raw
+  diary entry object** fetched from `get_diary()`, unmodified — never a
+  reconstruction — and its `_v3_headers()` sets three headers
+  (`x-crono-app-os`, `x-crono-app-build-number`, `x-crono-app-version`)
+  the original transcription dropped, plus a full `content-type:
+  application/json; charset=utf-8` instead of the shorter value used
+  elsewhere. Fixed by replacing `DiaryEntryRef` with
+  `Client.FindDiaryEntryRaw(ctx, sess, day, servingID)` — fetches the diary
+  and returns the matching entry's exact `json.RawMessage`, deliberately
+  not decoded through `DiaryEntry` and re-marshaled, since that round-trip
+  would silently drop any field our struct doesn't declare and reproduce
+  the same class of bug with a richer but still possibly-incomplete shape.
+  `DeleteEntries` now takes `[]json.RawMessage` and sends those bytes
+  verbatim, with the three added headers. `DBSyncer.DeleteServing`'s
+  signature simplified to `(ctx, day, servingID)` as a result — callers no
+  longer need to remember/pass back `food_id`/`measure_id`/`grams` from
+  when the serving was logged, since the authoritative shape is always
+  re-fetched from Cronometer directly.
 
 This is the same day the MCP food-logging connector (`internal/mcpserver`,
 `healthd mcp`) started using these endpoints for real — see

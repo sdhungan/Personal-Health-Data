@@ -171,19 +171,33 @@ func TestDiaryFiltersToServingsOnly(t *testing.T) {
 	}
 }
 
-// deleteTransport asserts DeleteEntries' DELETE request and returns the 204
-// No Content response Client.DeleteEntries requires (pathTransport always
-// returns 200, which doesn't fit this endpoint's contract).
+// deleteTransport serves get_diary (POST, DeleteServing/FindDiaryEntryRaw's
+// lookup step) and asserts+answers the delete_entries DELETE request —
+// regression coverage for a real live bug (2026-08-05): the original
+// implementation sent a hand-reconstructed {servingId, foodId, measureId,
+// grams} object, which Cronometer's real API rejected with "Not able to
+// deserialize data provided"; the fix re-fetches and forwards the diary
+// entry's own exact raw JSON instead (see FindDiaryEntryRaw/DeleteEntries's
+// doc comments) and adds the v3-specific headers the reference
+// implementation sends that the original code was missing.
 type deleteTransport struct {
-	calls int
+	deleteCalls   int
+	deleteBody    []byte
+	deleteHeaders http.Header
 }
 
 func (t *deleteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	t.calls++
-	if req.Method != http.MethodDelete {
-		return &http.Response{StatusCode: http.StatusMethodNotAllowed, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header), Request: req}, nil
+	if req.Method == http.MethodDelete {
+		t.deleteCalls++
+		t.deleteHeaders = req.Header
+		if req.Body != nil {
+			t.deleteBody, _ = io.ReadAll(req.Body)
+		}
+		return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header), Request: req}, nil
 	}
-	return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header), Request: req}, nil
+	// get_diary (POST /api/v2/get_diary) — served from the shared fixtureDiary,
+	// whose one Serving entry has servingId 1001 (see sync_test.go).
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(fixtureDiary)), Header: make(http.Header), Request: req}, nil
 }
 
 func TestDeleteServing(t *testing.T) {
@@ -191,11 +205,43 @@ func TestDeleteServing(t *testing.T) {
 	s := newTestSyncer(t, transport)
 	s.session = &Session{UserID: 42, Token: "tok-abc"} // DeleteEntries needs a session already loaded; it doesn't go through withRetry's lazy login
 
-	err := s.DeleteServing(context.Background(), DiaryEntryRef{ServingID: 12345, FoodID: 501, MeasureID: 1, Grams: 150})
+	err := s.DeleteServing(context.Background(), "2026-01-15", 1001)
 	if err != nil {
 		t.Fatalf("DeleteServing: %v", err)
 	}
-	if transport.calls != 1 {
-		t.Errorf("calls = %d, want 1", transport.calls)
+	if transport.deleteCalls != 1 {
+		t.Errorf("delete calls = %d, want 1", transport.deleteCalls)
+	}
+
+	// The request body must be the diary entry's own raw shape, not a
+	// hand-reconstructed subset — assert on the wrapper and a couple of
+	// fields get_diary's fixture entry has that the old minimal object
+	// didn't (e.g. "day"), rather than a brittle full-string comparison.
+	body := string(transport.deleteBody)
+	for _, want := range []string{`"diaryEntries"`, `"servingId":1001`, `"day":"2026-01-15"`, `"time":"08:00:00"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("delete request body = %s, missing %q", body, want)
+		}
+	}
+
+	if got := transport.deleteHeaders.Get("x-crono-app-os"); got != "android" {
+		t.Errorf("x-crono-app-os header = %q, want \"android\"", got)
+	}
+	if got := transport.deleteHeaders.Get("content-type"); got != "application/json; charset=utf-8" {
+		t.Errorf("content-type header = %q, want \"application/json; charset=utf-8\"", got)
+	}
+}
+
+func TestDeleteServingErrorsWhenServingNotFoundInDiary(t *testing.T) {
+	transport := &deleteTransport{}
+	s := newTestSyncer(t, transport)
+	s.session = &Session{UserID: 42, Token: "tok-abc"}
+
+	err := s.DeleteServing(context.Background(), "2026-01-15", 999999)
+	if err == nil {
+		t.Fatal("DeleteServing with an unknown serving id: expected an error, got nil")
+	}
+	if transport.deleteCalls != 0 {
+		t.Errorf("delete calls = %d, want 0 (should never reach the delete step without finding the entry first)", transport.deleteCalls)
 	}
 }

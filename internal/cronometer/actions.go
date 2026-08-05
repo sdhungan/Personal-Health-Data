@@ -2,6 +2,7 @@ package cronometer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -298,14 +299,25 @@ func (s *DBSyncer) Diary(ctx context.Context, day string) ([]LoggedServing, erro
 	return out, nil
 }
 
-// DeleteServing wraps DeleteEntries for one entry — an "undo last log"
-// affordance for correcting a mistaken cronometer_log_serving call.
-func (s *DBSyncer) DeleteServing(ctx context.Context, ref DiaryEntryRef) error {
-	_, err := withRetry(ctx, s, func(sess *Session) (struct{}, error) {
-		return struct{}{}, s.Client.DeleteEntries(ctx, sess, []DiaryEntryRef{ref})
+// DeleteServing removes one diary entry — an "undo last log" affordance
+// for correcting a mistaken cronometer_log_serving call. Takes only
+// day+servingID (not the food_id/measure_id/grams a caller might remember
+// from logging it) and re-fetches the entry's own exact representation
+// from Cronometer first (FindDiaryEntryRaw), since DeleteEntries needs
+// that exact shape back, not a reconstruction from remembered fields —
+// see FindDiaryEntryRaw's doc comment for why (CONFIRMED 2026-08-05, live).
+func (s *DBSyncer) DeleteServing(ctx context.Context, day string, servingID int64) error {
+	raw, err := withRetry(ctx, s, func(sess *Session) (json.RawMessage, error) {
+		return s.Client.FindDiaryEntryRaw(ctx, sess, day, servingID)
 	})
 	if err != nil {
-		return fmt.Errorf("deleting serving %d: %w", ref.ServingID, err)
+		return fmt.Errorf("finding serving %d on %s: %w", servingID, day, err)
+	}
+	_, err = withRetry(ctx, s, func(sess *Session) (struct{}, error) {
+		return struct{}{}, s.Client.DeleteEntries(ctx, sess, []json.RawMessage{raw})
+	})
+	if err != nil {
+		return fmt.Errorf("deleting serving %d: %w", servingID, err)
 	}
 	return nil
 }

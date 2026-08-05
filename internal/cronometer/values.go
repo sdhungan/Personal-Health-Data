@@ -128,16 +128,19 @@ func (r *NutritionScoresResponse) AllTargetsComponents() []ScoreComponent {
 
 // ---- Write endpoints (find_food, add_food, add_serving, delete_entries) ----
 //
-// PARTIALLY CONFIRMED against a real account on 2026-08-05 (via
-// cmd/cronoverify) — find_food (this struct, below), add_food, and
-// get_foods-immediately-after-add_food all round-tripped clean. add_serving
-// initially failed to decode (the DOCUMENTED guess of a string-typed
-// response "id" was wrong — it's a JSON number, see client.go's AddServing
-// doc comment); that's now fixed but not yet re-verified end to end.
-// delete_entries has never actually been exercised (the verification run
-// that would have reached it failed one step earlier, at add_serving's
-// decode error) — treat DeleteEntries/DiaryEntryRef as still DOCUMENTED,
-// not CONFIRMED, until a clean cmd/cronoverify pass reaches it.
+// CONFIRMED against a real account — find_food (this struct, below),
+// add_food, get_foods-immediately-after-add_food, and add_serving all
+// round-tripped clean as of 2026-08-05 (via cmd/cronoverify). delete_entries
+// was CONFIRMED separately the next day (2026-08-06), live against a real
+// diary entry, and needed a real fix, not just a verification pass: the
+// original DOCUMENTED guess (transcribed from a reference project) sent a
+// hand-reconstructed {servingId, foodId, measureId, grams} object and three
+// v3-specific headers short of what that reference project's own
+// implementation actually sends — Cronometer's API rejected it with "Not
+// able to deserialize data provided". Fixed by re-fetching the entry's own
+// exact raw JSON from get_diary and forwarding it unmodified (see
+// client.go's FindDiaryEntryRaw/DeleteEntries doc comments) — the reference
+// implementation re-sends full diary entry objects, never a reconstruction.
 //
 // Originally transcribed from rwestergren/cronometer-api-mcp (the same
 // reference project this package's read side was reverse-engineered from —

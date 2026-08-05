@@ -330,11 +330,8 @@ func (r *registrar) getDiary(ctx context.Context, _ *mcp.CallToolRequest, in get
 // ---- cronometer_delete_serving ----
 
 type deleteServingIn struct {
-	ServingID int64   `json:"serving_id" jsonschema:"the serving_id cronometer_log_serving returned"`
-	FoodID    int64   `json:"food_id" jsonschema:"the food_id cronometer_log_serving was called with"`
-	MeasureID int64   `json:"measure_id" jsonschema:"the measure_id cronometer_log_serving was called with"`
-	Grams     float64 `json:"grams" jsonschema:"the grams cronometer_log_serving was called with"`
-	Day       string  `json:"day" jsonschema:"the day cronometer_log_serving returned (YYYY-MM-DD) — needed to refresh the local dashboard mirror for the right day after deleting"`
+	ServingID int64  `json:"serving_id" jsonschema:"the serving_id cronometer_log_serving or cronometer_get_diary returned"`
+	Day       string `json:"day" jsonschema:"the day this serving is logged on (YYYY-MM-DD) — needed both to find the entry (it's re-fetched from Cronometer directly, not reconstructed from what you remember about it) and to refresh the local dashboard mirror for the right day after deleting"`
 }
 
 type deleteServingOut struct {
@@ -345,9 +342,7 @@ func (r *registrar) deleteServing(ctx context.Context, _ *mcp.CallToolRequest, i
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	err := r.syncer.DeleteServing(ctx, cronometer.DiaryEntryRef{
-		ServingID: in.ServingID, FoodID: in.FoodID, MeasureID: in.MeasureID, Grams: in.Grams,
-	})
+	err := r.syncer.DeleteServing(ctx, in.Day, in.ServingID)
 	if err != nil {
 		return nil, deleteServingOut{}, fmt.Errorf("cronometer_delete_serving: %w", err)
 	}

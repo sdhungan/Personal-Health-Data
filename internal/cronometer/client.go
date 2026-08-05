@@ -382,34 +382,63 @@ func (c *Client) AddServing(ctx context.Context, sess *Session, e ServingEntry) 
 	return out.ID, nil
 }
 
-// DiaryEntryRef identifies one diary entry to remove via DeleteEntries.
-// ServingID is int64 — CONFIRMED 2026-08-05, see AddServing's doc comment.
-type DiaryEntryRef struct {
-	ServingID int64
-	FoodID    int64
-	MeasureID int64
-	Grams     float64
+// FindDiaryEntryRaw fetches day's diary and returns the *exact, unmodified*
+// raw JSON for the entry matching servingID — CONFIRMED 2026-08-05 (live,
+// against a real account) that DeleteEntries needs this rather than a
+// hand-reconstructed {servingId, foodId, measureId, grams} subset (the
+// original DOCUMENTED guess, transcribed from a reference project): the
+// real v3 endpoint responds "Not able to deserialize data provided" to the
+// minimal shape, because the reference implementation's own delete_entries
+// actually re-sends full diary entry objects fetched from get_diary(),
+// unmodified — not a reconstruction. json.RawMessage (not DiaryEntry) is
+// deliberate: decoding into our own DiaryEntry struct and re-marshaling it
+// would silently drop any real API field that struct doesn't happen to
+// declare, reproducing the same class of bug with a richer but still
+// possibly-incomplete shape — passing the untouched bytes through
+// guarantees byte-for-byte fidelity with whatever Cronometer actually sent.
+func (c *Client) FindDiaryEntryRaw(ctx context.Context, sess *Session, day string, servingID int64) (json.RawMessage, error) {
+	data, err := c.call(ctx, sess, "/api/v2/get_diary", map[string]any{
+		"day": day, "config": map[string]any{"call_version": 1},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fetching diary for %s: %w", day, err)
+	}
+	var out struct {
+		Diary []json.RawMessage `json:"diary"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decoding get_diary response: %w", err)
+	}
+	for _, raw := range out.Diary {
+		var probe struct {
+			ServingID int64 `json:"servingId"`
+		}
+		if err := json.Unmarshal(raw, &probe); err != nil {
+			continue // a non-Serving entry shape (Exercise/Biometric) may not decode into this probe at all — skip, not fatal
+		}
+		if probe.ServingID == servingID {
+			return raw, nil
+		}
+	}
+	return nil, fmt.Errorf("no diary entry with serving id %d found on %s", servingID, day)
 }
 
 // DeleteEntries removes one or more diary entries via the v3 API — the only
 // endpoint observed using header-based auth (x-crono-session) rather than
 // this package's usual JSON-body auth (see call), so it builds its own
-// request instead of going through call/post. Used to clean up a throwaway
-// entry during write-endpoint verification, and potentially a future "undo"
-// affordance on the dashboard.
-func (c *Client) DeleteEntries(ctx context.Context, sess *Session, entries []DiaryEntryRef) error {
-	type diaryEntry struct {
-		ServingID int64   `json:"servingId"`
-		FoodID    int64   `json:"foodId"`
-		MeasureID int64   `json:"measureId"`
-		Grams     float64 `json:"grams"`
-	}
+// request instead of going through call/post. entries must be the exact
+// raw JSON objects FindDiaryEntryRaw returned (see its doc comment for
+// why). The three x-crono-app-* headers and the charset on content-type
+// were both missing from the original DOCUMENTED implementation — added
+// to match the reference implementation's _v3_headers() after the minimal
+// body shape alone still wasn't confirmed sufficient; kept even though
+// only the body shape was root-caused live, since removing them again
+// would mean re-deriving that they're harmless without another real
+// account round-trip.
+func (c *Client) DeleteEntries(ctx context.Context, sess *Session, entries []json.RawMessage) error {
 	payload := struct {
-		DiaryEntries []diaryEntry `json:"diaryEntries"`
-	}{DiaryEntries: make([]diaryEntry, len(entries))}
-	for i, e := range entries {
-		payload.DiaryEntries[i] = diaryEntry{ServingID: e.ServingID, FoodID: e.FoodID, MeasureID: e.MeasureID, Grams: e.Grams}
-	}
+		DiaryEntries []json.RawMessage `json:"diaryEntries"`
+	}{DiaryEntries: entries}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshaling delete_entries request: %w", err)
@@ -420,8 +449,11 @@ func (c *Client) DeleteEntries(ctx context.Context, sess *Session, entries []Dia
 	if err != nil {
 		return fmt.Errorf("building delete_entries request: %w", err)
 	}
-	req.Header.Set("content-type", "application/json")
+	req.Header.Set("content-type", "application/json; charset=utf-8")
 	req.Header.Set("x-crono-session", sess.Token)
+	req.Header.Set("x-crono-app-os", "android")
+	req.Header.Set("x-crono-app-build-number", "2807")
+	req.Header.Set("x-crono-app-version", "4.48.2")
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {

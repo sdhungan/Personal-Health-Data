@@ -29,6 +29,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -103,13 +104,16 @@ func run(ctx context.Context, query string) error {
 	// since the food now exists in the real account whether or not the
 	// rest of this verification succeeds. servingID==0 means "nothing to
 	// delete_entries yet" (a real serving id is never 0).
-	cleanup := func(servingID, measureID int64, grams float64) {
+	cleanup := func(day string, servingID int64) {
 		if servingID == 0 {
 			return
 		}
-		if err := client.DeleteEntries(ctx, sess, []cronometer.DiaryEntryRef{
-			{ServingID: servingID, FoodID: foodID, MeasureID: measureID, Grams: grams},
-		}); err != nil {
+		raw, err := client.FindDiaryEntryRaw(ctx, sess, day, servingID)
+		if err != nil {
+			fmt.Printf("MANUAL CLEANUP NEEDED: failed to find serving %d for delete (food id %d, %q): %v\n", servingID, foodID, foodName, err)
+			return
+		}
+		if err := client.DeleteEntries(ctx, sess, []json.RawMessage{raw}); err != nil {
 			fmt.Printf("MANUAL CLEANUP NEEDED: failed to delete serving %d (food id %d, %q): %v\n", servingID, foodID, foodName, err)
 			return
 		}
@@ -148,7 +152,7 @@ func run(ctx context.Context, query string) error {
 	// ---- get_diary (confirm the serving is actually visible) ----
 	diary, err := client.GetDiary(ctx, sess, day)
 	if err != nil {
-		cleanup(servingID, measureID, 100)
+		cleanup(day, servingID)
 		return fmt.Errorf("get_diary after add_serving: %w", err)
 	}
 	found := false
@@ -159,13 +163,13 @@ func run(ctx context.Context, query string) error {
 		}
 	}
 	if !found {
-		cleanup(servingID, measureID, 100)
+		cleanup(day, servingID)
 		return fmt.Errorf("logged serving for food %d not found in get_diary for %s — add_serving may not have actually persisted", foodID, day)
 	}
 	fmt.Println("PASS  get_diary shows the logged serving")
 
 	// ---- delete_entries (cleanup) ----
-	cleanup(servingID, measureID, 100)
+	cleanup(day, servingID)
 
 	// ---- get_diary again (confirm removal) ----
 	diary2, err := client.GetDiary(ctx, sess, day)
