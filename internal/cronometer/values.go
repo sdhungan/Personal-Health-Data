@@ -126,6 +126,30 @@ func (r *NutritionScoresResponse) AllTargetsComponents() []ScoreComponent {
 	return nil
 }
 
+// ---- Write endpoints (find_food, add_food, add_serving, delete_entries) ----
+//
+// PARTIALLY CONFIRMED against a real account on 2026-08-05 (via
+// cmd/cronoverify) — find_food (this struct, below), add_food, and
+// get_foods-immediately-after-add_food all round-tripped clean. add_serving
+// initially failed to decode (the DOCUMENTED guess of a string-typed
+// response "id" was wrong — it's a JSON number, see client.go's AddServing
+// doc comment); that's now fixed but not yet re-verified end to end.
+// delete_entries has never actually been exercised (the verification run
+// that would have reached it failed one step earlier, at add_serving's
+// decode error) — treat DeleteEntries/DiaryEntryRef as still DOCUMENTED,
+// not CONFIRMED, until a clean cmd/cronoverify pass reaches it.
+//
+// Originally transcribed from rwestergren/cronometer-api-mcp (the same
+// reference project this package's read side was reverse-engineered from —
+// see client.go's package comment).
+
+type FoodSearchResult struct {
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	MeasureID     int64  `json:"measureId"`
+	TranslationID int64  `json:"translationId"`
+}
+
 // ---- get_metrics ----
 
 type Metric struct {

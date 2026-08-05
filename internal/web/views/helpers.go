@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -35,6 +36,19 @@ func FormatMinutes(total int64) string {
 		return fmt.Sprintf("%dh", h)
 	}
 	return fmt.Sprintf("%dh %dm", h, m)
+}
+
+// FormatQuantity renders a food serving's quantity (cronometer_serving's
+// quantity_value — grams/measure-size, e.g. 0.4487260... cups) with just
+// enough precision to stay meaningful: up to 2 decimal places, trailing
+// zeros trimmed, so a whole amount reads as "1" (not "1.00") and a
+// fractional one reads as "0.45" (not the "0" a bare %.0f previously
+// rounded it to, silently discarding the only thing that made the
+// quantity worth showing — see foodlog.go's QuantityLabel).
+func FormatQuantity(v float64) string {
+	s := strconv.FormatFloat(v, 'f', 2, 64)
+	s = strings.TrimRight(s, "0")
+	return strings.TrimRight(s, ".")
 }
 
 // formatNumber adds thousands separators, e.g. 6287 -> "6,287".

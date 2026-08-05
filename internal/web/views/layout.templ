@@ -96,6 +96,10 @@ templ Header(username string) {
 							@iconSettingsGear()
 							Google settings
 						</a>
+						<a class="user-menu-item" href="/settings/mcp-connector" data-on:click="$userMenuOpen = false">
+							@iconSettingsGear()
+							Claude connector
+						</a>
 						<form method="post" action="/logout">
 							<button type="submit" class="user-menu-item user-menu-item-btn">
 								@iconLogout()

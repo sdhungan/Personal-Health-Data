@@ -3,8 +3,8 @@ package web
 import (
 	"io/fs"
 
-	"github.com/sdhungan/Personal-Health-Data/internal/webauth"
 	"github.com/sdhungan/Personal-Health-Data/internal/web/views"
+	"github.com/sdhungan/Personal-Health-Data/internal/webauth"
 )
 
 // registerRoutes wires every endpoint under views.APIPrefix (the same
@@ -31,8 +31,10 @@ func (s *Server) registerRoutes() {
 	s.echo.POST("/logout", s.handleLogout, auth)
 	s.echo.GET("/settings/google-client", s.handleGoogleClientSettingsPage, auth)
 	s.echo.POST("/settings/google-client", s.handleGoogleClientUpload, auth)
+	s.echo.POST("/settings/google-client/connect", s.handleGoogleClientConnectAccount, auth)
 	s.echo.GET("/settings/account", s.handleAccountSettingsPage, auth)
 	s.echo.POST("/settings/account/delete", s.handleAccountDelete, auth)
+	s.echo.GET("/settings/mcp-connector", s.handleMCPConnectorPage, auth)
 	s.echo.GET("/onboarding/connect", s.handleOnboardingPage, auth)
 	s.echo.POST("/onboarding/connect/google", s.handleOnboardingConnectGoogle, auth)
 	s.echo.POST("/onboarding/connect/cronometer", s.handleOnboardingConnectCronometer, auth)

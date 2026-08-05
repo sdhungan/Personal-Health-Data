@@ -154,6 +154,70 @@ func TestCheckpointPersistsWithoutClosing(t *testing.T) {
 	}
 }
 
+// TestCloseLeavesSharedWorkingFileIntactWhenStillOpen is a regression test
+// for a real incident (2026-08-05): with two healthd processes sharing one
+// root (e.g. "healthd serve" alongside a "healthd mcp" connector instance,
+// see ARCHITECTURE.md §11), the second process's Close() used to zero the
+// shared working file's bytes in place before attempting to remove it —
+// the zero-write silently succeeds even while another process still has
+// the file open (Windows only blocks the *remove*, not concurrent writes),
+// so a failed remove still meant a live sibling process's database had
+// already been destroyed. removeWorkingFile now renames the file to a
+// private temp name first, which fails cleanly instead when another
+// process still holds it open, leaving the original path untouched.
+func TestCloseLeavesSharedWorkingFileIntactWhenStillOpen(t *testing.T) {
+	dir := t.TempDir()
+	encPath := filepath.Join(dir, "health.db.enc")
+	workPath := filepath.Join(dir, ".health.db.work")
+	key := testKey(t)
+
+	if err := Init(encPath, workPath, key); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Simulate two processes sharing one root: both Open() the same
+	// workPath, each getting its own *sql.DB handle onto the same file
+	// (exactly what happens when "healthd serve" is already running and
+	// "healthd mcp" opens the same --root — see Open's "recover" branch).
+	first, err := Open(encPath, workPath, key)
+	if err != nil {
+		t.Fatalf("Open (first process): %v", err)
+	}
+	defer first.Close()
+
+	if _, err := first.DB().Exec(
+		`INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'x');
+		 INSERT INTO user_profile (user_id, sex) VALUES (1, 'female')`,
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := first.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	second, err := Open(encPath, workPath, key)
+	if err != nil {
+		t.Fatalf("Open (second process, same workPath): %v", err)
+	}
+
+	if err := second.Close(); err == nil {
+		t.Error("second.Close(): expected an error (workPath still in use by first), got none")
+	}
+	if _, err := os.Stat(workPath); err != nil {
+		t.Fatalf("shared working file should still exist after second.Close(): %v", err)
+	}
+
+	// The critical assertion: first (still "running") must still see
+	// valid, unzeroed data through its own already-open connection.
+	var sex string
+	if err := first.DB().QueryRow(`SELECT sex FROM user_profile WHERE user_id = 1`).Scan(&sex); err != nil {
+		t.Fatalf("querying via first's still-open connection after second.Close(): %v", err)
+	}
+	if sex != "female" {
+		t.Errorf("sex = %q, want %q — shared working file was corrupted by the other process's Close()", sex, "female")
+	}
+}
+
 func TestOpenRecoversFromUncleanShutdown(t *testing.T) {
 	dir := t.TempDir()
 	encPath := filepath.Join(dir, "health.db.enc")

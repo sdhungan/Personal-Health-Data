@@ -56,6 +56,12 @@ type Server struct {
 	// per-user one (see internal/paths.GoogleClientSecretFile).
 	RootKey crypto.Key
 
+	// ExecutablePath is a best-effort os.Executable() result, used only to
+	// pre-fill the "healthd mcp" command snippet on /settings/mcp-connector
+	// (see mcp_connector.go) — an empty value just means that page falls
+	// back to a generic "healthd" placeholder instead of the real path.
+	ExecutablePath string
+
 	// googleSyncers/cronoSyncers cache one DBSyncer per user, built lazily
 	// on first use from that user's own per-user credential files (see
 	// internal/paths's UserGoogleOAuthFile/UserCronometerCredentialsFile).
@@ -95,10 +101,13 @@ func New(store *db.Store, p *paths.Paths, cfg *config.Config, rootKey crypto.Key
 	e.Use(middleware.Recover())
 	e.Use(middleware.Logger())
 
+	exePath, _ := os.Executable() // best-effort; see ExecutablePath's doc comment
+
 	s := &Server{
 		echo: e, store: store, DB: store.DB(), Paths: p, Config: cfg, RootKey: rootKey,
-		googleSyncers: map[int64]*googlehealth.DBSyncer{},
-		cronoSyncers:  map[int64]*cronometer.DBSyncer{},
+		ExecutablePath: exePath,
+		googleSyncers:  map[int64]*googlehealth.DBSyncer{},
+		cronoSyncers:   map[int64]*cronometer.DBSyncer{},
 	}
 	s.registerRoutes()
 	return s

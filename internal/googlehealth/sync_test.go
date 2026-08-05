@@ -10,6 +10,7 @@ import (
 	"time"
 
 	dbpkg "github.com/sdhungan/Personal-Health-Data/internal/db"
+	"github.com/sdhungan/Personal-Health-Data/internal/healthdata"
 )
 
 // fakeTransport routes requests to canned JSON bodies keyed by
@@ -495,5 +496,50 @@ func TestSyncDayPreservesFieldsNotReturnedThisRun(t *testing.T) {
 	}
 	if stepsTotal != 2000 {
 		t.Errorf("steps_total = %d after a re-sync where that endpoint returned nothing, want 2000 (preserved)", stepsTotal)
+	}
+}
+
+// TestUpsertActiveMinutesByLevelRollsBackOnPartialFailure is a regression
+// test for upsertActiveMinutesByLevel's delete-then-insert-loop being
+// wrapped in one transaction: a failure partway through the insert loop
+// must roll back the preceding delete too, so a prior day's rows are left
+// untouched rather than deleted with nothing (or only some rows) re-inserted
+// in their place.
+func TestUpsertActiveMinutesByLevelRollsBackOnPartialFailure(t *testing.T) {
+	syncer, db := newTestSyncer(t, nil)
+	day := "2026-07-30"
+
+	// Seed the "prior sync" state directly.
+	if err := syncer.upsertActiveMinutesByLevel(context.Background(), day, []healthdata.ActiveMinutesByLevel{
+		{Day: day, Level: "MODERATE", Minutes: 20},
+	}); err != nil {
+		t.Fatalf("seeding prior state: %v", err)
+	}
+
+	// A duplicate (day, level) pair within the same batch violates the
+	// table's primary key on the second insert, simulating a fetch that
+	// returns malformed data partway through the day's levels.
+	err := syncer.upsertActiveMinutesByLevel(context.Background(), day, []healthdata.ActiveMinutesByLevel{
+		{Day: day, Level: "VIGOROUS", Minutes: 10},
+		{Day: day, Level: "VIGOROUS", Minutes: 99},
+	})
+	if err == nil {
+		t.Fatal("upsertActiveMinutesByLevel with a duplicate level: expected an error, got none")
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT count(*) FROM watch_active_minutes_by_level WHERE day = ?`, day).Scan(&count); err != nil {
+		t.Fatalf("counting watch_active_minutes_by_level: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("watch_active_minutes_by_level has %d rows after a failed upsert, want 1 (the failed delete+insert must roll back entirely, not partially apply)", count)
+	}
+	var level string
+	var minutes int64
+	if err := db.QueryRow(`SELECT activity_level, minutes FROM watch_active_minutes_by_level WHERE day = ?`, day).Scan(&level, &minutes); err != nil {
+		t.Fatalf("querying surviving row: %v", err)
+	}
+	if level != "MODERATE" || minutes != 20 {
+		t.Errorf("surviving row = (%q, %d), want the untouched pre-failure row (MODERATE, 20)", level, minutes)
 	}
 }

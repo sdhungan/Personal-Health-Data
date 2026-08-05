@@ -11,15 +11,21 @@ import templruntime "github.com/a-h/templ/runtime"
 // GoogleClientSettingsPage lets any logged-in user upload/replace the
 // app-wide Google OAuth client JSON (client_id/client_secret) — a
 // one-per-deployment secret registered once in Google Cloud Console, not a
-// per-account credential (every account's own Google login still happens
-// through Google's own real consent screen once this is set — see
-// ARCHITECTURE.md §10). configured reports whether one is already on file.
-// successMsg is only set right after a fresh upload (via ?uploaded=1, see
+// per-account credential — and, right below it, connect *this* account's
+// own Google Health via the real consent screen. The two live on one page
+// deliberately: fixing the client JSON and then connecting your own
+// account is exactly the two-step flow someone hits when "Connect Google
+// Health" first fails for missing-client reasons (see
+// handleOnboardingConnectGoogle's error, which links back here) — without
+// this section they'd have to navigate back to /onboarding/connect by hand
+// to finish. configured reports whether the app-wide client is on file;
+// googleConnected reports whether username's own account has a Google
+// Health token yet. successMsg is set right after either a fresh upload
+// (?uploaded=1) or a fresh account connection (?connected=1, see
 // handleGoogleClientSettingsPage) — shown as its own distinct banner so
-// replacing an already-configured client doesn't look like a no-op: before
-// this, the page just said "a client is configured" whether you'd uploaded
-// a new one or not, which gave no visible sign the upload had taken effect.
-func GoogleClientSettingsPage(configured bool, successMsg, errMsg string) templ.Component {
+// neither action looks like a no-op afterward. errMsg surfaces a failure
+// from whichever of the two actions was just attempted.
+func GoogleClientSettingsPage(configured bool, successMsg, errMsg string, username string, googleConnected bool) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -60,7 +66,7 @@ func GoogleClientSettingsPage(configured bool, successMsg, errMsg string) templ.
 			var templ_7745c5c3_Var2 string
 			templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinStringErrs(successMsg)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 38, Col: 55}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 44, Col: 55}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 			if templ_7745c5c3_Err != nil {
@@ -89,7 +95,7 @@ func GoogleClientSettingsPage(configured bool, successMsg, errMsg string) templ.
 			var templ_7745c5c3_Var3 string
 			templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(errMsg)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 45, Col: 38}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 51, Col: 38}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 			if templ_7745c5c3_Err != nil {
@@ -115,7 +121,66 @@ func GoogleClientSettingsPage(configured bool, successMsg, errMsg string) templ.
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</button></div></form><p><a href=\"/\">&larr; Back to dashboard</a></p></main></body></html>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</button></div></form><h2 class=\"brand-title\" style=\"font-size:1.1rem\">Your account's connection</h2>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if googleConnected {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "<p class=\"body-saved-status\">&#10003; Google Health is connected for ")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var4 string
+			templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(username)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 72, Col: 84}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, ".</p>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		} else if configured {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "<p>Signed in as <strong>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var5 string
+			templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(username)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 75, Col: 37}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "</strong>. Connect Google Health for this account through Google's own consent screen — opens in your browser.</p><form method=\"post\" action=\"/settings/google-client/connect\" class=\"body-form\"><div class=\"body-form-footer\"><button type=\"submit\" class=\"body-carry-btn\">Connect Google Health</button></div></form>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		} else {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "<p class=\"journal-error\">Upload a client above first — there's nothing for ")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var6 string
+			templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(username)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 84, Col: 92}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, " to connect through yet.</p>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, "<p><a href=\"/\">&larr; Back to dashboard</a></p></main></body></html>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

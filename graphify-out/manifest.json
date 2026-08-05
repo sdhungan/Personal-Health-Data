@@ -1,0 +1,532 @@
+{
+  ".claude/settings.local.json": {
+    "mtime": 1785452913.1577482,
+    "ast_hash": "a7112bbeb5fa452c438336f6502e5bfe",
+    "semantic_hash": "a7112bbeb5fa452c438336f6502e5bfe"
+  },
+  "cmd/cronodump/main.go": {
+    "mtime": 1785529631.4033582,
+    "ast_hash": "42da26a8e7dc48515d80f75792c00651",
+    "semantic_hash": "42da26a8e7dc48515d80f75792c00651"
+  },
+  "cmd/healthd/main.go": {
+    "mtime": 1785447363.7979407,
+    "ast_hash": "1fde25479f3f5b2efaf30cf799b45c2e",
+    "semantic_hash": "1fde25479f3f5b2efaf30cf799b45c2e"
+  },
+  "cmd/tmpinspect/main.go": {
+    "mtime": 1785484554.4009714,
+    "ast_hash": "699a5317daa4bf3de3f3c20431ded639",
+    "semantic_hash": "699a5317daa4bf3de3f3c20431ded639"
+  },
+  "go.mod": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "baf5b351b3a24b793282443012f86086",
+    "semantic_hash": "baf5b351b3a24b793282443012f86086"
+  },
+  "internal/cli/auth.go": {
+    "mtime": 1785703540.3595502,
+    "ast_hash": "0ca18368a28956cef20f1315d9591e75",
+    "semantic_hash": "0ca18368a28956cef20f1315d9591e75"
+  },
+  "internal/cli/cronometersync.go": {
+    "mtime": 1785703540.3595502,
+    "ast_hash": "9797289b99e695660b21135a61ca655f",
+    "semantic_hash": "9797289b99e695660b21135a61ca655f"
+  },
+  "internal/cli/db.go": {
+    "mtime": 1785449413.8642182,
+    "ast_hash": "e7d3b5f258e96ccc2bbc2887847c2d38",
+    "semantic_hash": "e7d3b5f258e96ccc2bbc2887847c2d38"
+  },
+  "internal/cli/googleclient.go": {
+    "mtime": 1785703540.3605504,
+    "ast_hash": "c4c88d111358f38ad54b8e9c44ecaa33",
+    "semantic_hash": "c4c88d111358f38ad54b8e9c44ecaa33"
+  },
+  "internal/cli/googlehealthsync.go": {
+    "mtime": 1785703540.3605504,
+    "ast_hash": "5bf5721fb6cd6fb07594a9e856bb22e3",
+    "semantic_hash": "5bf5721fb6cd6fb07594a9e856bb22e3"
+  },
+  "internal/cli/root.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "208072b151c6bfaa7dc3c41697ced527",
+    "semantic_hash": "208072b151c6bfaa7dc3c41697ced527"
+  },
+  "internal/cli/serve.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "e67a69030bbc58d428a8ab730764aaa4",
+    "semantic_hash": "e67a69030bbc58d428a8ab730764aaa4"
+  },
+  "internal/cli/service.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "5a5a3fd4a2649314a8d71c6db2aa72cd",
+    "semantic_hash": "5a5a3fd4a2649314a8d71c6db2aa72cd"
+  },
+  "internal/cli/sync.go": {
+    "mtime": 1785703540.3615503,
+    "ast_hash": "d946233126bfeab7937ba0ef51ea5705",
+    "semantic_hash": "d946233126bfeab7937ba0ef51ea5705"
+  },
+  "internal/cli/users.go": {
+    "mtime": 1785703540.3615503,
+    "ast_hash": "746e487c6e753aceb01aa5414adf89df",
+    "semantic_hash": "746e487c6e753aceb01aa5414adf89df"
+  },
+  "internal/config/config.go": {
+    "mtime": 1785703540.3615503,
+    "ast_hash": "b8da24c5391a84207f019fa5ec191d4f",
+    "semantic_hash": "b8da24c5391a84207f019fa5ec191d4f"
+  },
+  "internal/config/template.go": {
+    "mtime": 1785703540.3615503,
+    "ast_hash": "8e237a1185e8697e47df45dc6986133d",
+    "semantic_hash": "8e237a1185e8697e47df45dc6986133d"
+  },
+  "internal/cronometer/client.go": {
+    "mtime": 1785529631.4063623,
+    "ast_hash": "f111963000cdf6e20098db8103b9bc88",
+    "semantic_hash": "f111963000cdf6e20098db8103b9bc88"
+  },
+  "internal/cronometer/nutrients.go": {
+    "mtime": 1785529631.4063623,
+    "ast_hash": "b563269c421fe786fdc96e9c5c8d411b",
+    "semantic_hash": "b563269c421fe786fdc96e9c5c8d411b"
+  },
+  "internal/cronometer/session.go": {
+    "mtime": 1785529631.4063623,
+    "ast_hash": "d514702e1dc7cd4ee901b9d486914617",
+    "semantic_hash": "d514702e1dc7cd4ee901b9d486914617"
+  },
+  "internal/cronometer/sync.go": {
+    "mtime": 1785703540.3625503,
+    "ast_hash": "7af907b612301c6a0412606ce8d702c1",
+    "semantic_hash": "7af907b612301c6a0412606ce8d702c1"
+  },
+  "internal/cronometer/sync_test.go": {
+    "mtime": 1785703540.3625503,
+    "ast_hash": "f53499153a0d8e2915ee9f430c35efa5",
+    "semantic_hash": "f53499153a0d8e2915ee9f430c35efa5"
+  },
+  "internal/cronometer/sync_upsert.go": {
+    "mtime": 1785703540.3625503,
+    "ast_hash": "ea8696b8d7e34fb8a296d27c2762bd0f",
+    "semantic_hash": "ea8696b8d7e34fb8a296d27c2762bd0f"
+  },
+  "internal/cronometer/values.go": {
+    "mtime": 1785529631.411382,
+    "ast_hash": "6b1458331e13872057615a1b051dd175",
+    "semantic_hash": "6b1458331e13872057615a1b051dd175"
+  },
+  "internal/crypto/crypto.go": {
+    "mtime": 1785448725.1408427,
+    "ast_hash": "66a504a0d0b4e1364fef7b0e0f4bfcc7",
+    "semantic_hash": "66a504a0d0b4e1364fef7b0e0f4bfcc7"
+  },
+  "internal/crypto/crypto_test.go": {
+    "mtime": 1785448756.5313804,
+    "ast_hash": "0d9418b33e14e287bd28b5319f01e856",
+    "semantic_hash": "0d9418b33e14e287bd28b5319f01e856"
+  },
+  "internal/crypto/kdf.go": {
+    "mtime": 1785448769.071203,
+    "ast_hash": "fe68f35ffd1ece3a31b75e8d58002849",
+    "semantic_hash": "fe68f35ffd1ece3a31b75e8d58002849"
+  },
+  "internal/crypto/keyfile.go": {
+    "mtime": 1785448739.7485416,
+    "ast_hash": "ece4b80f632e5a407e2cabc32aa9a9f2",
+    "semantic_hash": "ece4b80f632e5a407e2cabc32aa9a9f2"
+  },
+  "internal/db/dump.go": {
+    "mtime": 1785448954.5813515,
+    "ast_hash": "1a6df5ca67ecfd86c36dea5cd03a37b3",
+    "semantic_hash": "1a6df5ca67ecfd86c36dea5cd03a37b3"
+  },
+  "internal/db/dump_test.go": {
+    "mtime": 1785703540.3625503,
+    "ast_hash": "831751b852da4728644930800b387b3c",
+    "semantic_hash": "831751b852da4728644930800b387b3c"
+  },
+  "internal/db/migrations.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "08c56e16fe1c3836a7362b9a9682db20",
+    "semantic_hash": "08c56e16fe1c3836a7362b9a9682db20"
+  },
+  "internal/db/schema.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "9a614399aa8ee82afd7d4774cde55513",
+    "semantic_hash": "9a614399aa8ee82afd7d4774cde55513"
+  },
+  "internal/db/schema.sql": {
+    "mtime": 1785703540.36355,
+    "ast_hash": "5a3178ab7d1bcaace4ec72ef97ed83c4",
+    "semantic_hash": "5a3178ab7d1bcaace4ec72ef97ed83c4"
+  },
+  "internal/db/schema_test.go": {
+    "mtime": 1785703540.36355,
+    "ast_hash": "fcecad4ce8ebbc945ab283f924106408",
+    "semantic_hash": "fcecad4ce8ebbc945ab283f924106408"
+  },
+  "internal/db/store.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "2325bb1e88828c168706f0bd21e2e0d8",
+    "semantic_hash": "2325bb1e88828c168706f0bd21e2e0d8"
+  },
+  "internal/db/store_test.go": {
+    "mtime": 1785703540.36355,
+    "ast_hash": "24ab6a3fba206703031f53511ecd63eb",
+    "semantic_hash": "24ab6a3fba206703031f53511ecd63eb"
+  },
+  "internal/googleauth/browser.go": {
+    "mtime": 1785449341.109771,
+    "ast_hash": "5240562868109bc243fe8f1db7d7d75b",
+    "semantic_hash": "5240562868109bc243fe8f1db7d7d75b"
+  },
+  "internal/googleauth/flow.go": {
+    "mtime": 1785703540.36355,
+    "ast_hash": "40a34baa507d5877ba27ec9bc9186290",
+    "semantic_hash": "40a34baa507d5877ba27ec9bc9186290"
+  },
+  "internal/googleauth/flow_test.go": {
+    "mtime": 1785703540.36455,
+    "ast_hash": "2b53f8465b3cef68dd00c66e5b1dbcbd",
+    "semantic_hash": "2b53f8465b3cef68dd00c66e5b1dbcbd"
+  },
+  "internal/googleauth/oauth.go": {
+    "mtime": 1785703540.36455,
+    "ast_hash": "b6ccf2b86a97246966418525ccdd1cd9",
+    "semantic_hash": "b6ccf2b86a97246966418525ccdd1cd9"
+  },
+  "internal/googleauth/scopes.go": {
+    "mtime": 1785449273.2644923,
+    "ast_hash": "3b02a732c5933fd5d7db11577b4713b5",
+    "semantic_hash": "3b02a732c5933fd5d7db11577b4713b5"
+  },
+  "internal/googleauth/token.go": {
+    "mtime": 1785703540.36455,
+    "ast_hash": "a6c4c46427d8969a4db0405a39c54bae",
+    "semantic_hash": "a6c4c46427d8969a4db0405a39c54bae"
+  },
+  "internal/googleauth/token_test.go": {
+    "mtime": 1785449366.8115318,
+    "ast_hash": "8d114fc9bc66197c98feed45c93ba169",
+    "semantic_hash": "8d114fc9bc66197c98feed45c93ba169"
+  },
+  "internal/googlehealth/client.go": {
+    "mtime": 1785452804.900355,
+    "ast_hash": "7c6847b739881645e3fa2c4ed5c7b869",
+    "semantic_hash": "7c6847b739881645e3fa2c4ed5c7b869"
+  },
+  "internal/googlehealth/datatypes.go": {
+    "mtime": 1785529631.4123232,
+    "ast_hash": "3685789093024009abf60eb392c6e924",
+    "semantic_hash": "3685789093024009abf60eb392c6e924"
+  },
+  "internal/googlehealth/dump.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "1dfe832fa4cebc7c1b26fccfb6b45311",
+    "semantic_hash": "1dfe832fa4cebc7c1b26fccfb6b45311"
+  },
+  "internal/googlehealth/dump_test.go": {
+    "mtime": 1785452459.1702182,
+    "ast_hash": "3c109019e3c179184b23a07db7286d46",
+    "semantic_hash": "3c109019e3c179184b23a07db7286d46"
+  },
+  "internal/googlehealth/envelope.go": {
+    "mtime": 1785452704.7552073,
+    "ast_hash": "19cccc7aa39eaaed51ce5399bb1e000c",
+    "semantic_hash": "19cccc7aa39eaaed51ce5399bb1e000c"
+  },
+  "internal/googlehealth/keys.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "c7724f194f2f1681d234da89057b550f",
+    "semantic_hash": "c7724f194f2f1681d234da89057b550f"
+  },
+  "internal/googlehealth/parse_test.go": {
+    "mtime": 1785452783.775352,
+    "ast_hash": "4e24179a1e56a140c103bd840b800006",
+    "semantic_hash": "4e24179a1e56a140c103bd840b800006"
+  },
+  "internal/googlehealth/sync.go": {
+    "mtime": 1785703540.36455,
+    "ast_hash": "b042acf5c1b8b2dedec3b9441527caa5",
+    "semantic_hash": "b042acf5c1b8b2dedec3b9441527caa5"
+  },
+  "internal/googlehealth/sync_details.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "587887f92d327212f0ddb2489038903f",
+    "semantic_hash": "587887f92d327212f0ddb2489038903f"
+  },
+  "internal/googlehealth/sync_filters.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "b6b4d0e0baa8e015765bebe07f4b6c3b",
+    "semantic_hash": "b6b4d0e0baa8e015765bebe07f4b6c3b"
+  },
+  "internal/googlehealth/sync_test.go": {
+    "mtime": 1785703540.36555,
+    "ast_hash": "9f835cd4f33d068b138233480df13330",
+    "semantic_hash": "9f835cd4f33d068b138233480df13330"
+  },
+  "internal/googlehealth/sync_upsert.go": {
+    "mtime": 1785703540.36555,
+    "ast_hash": "58d441b131d362315031fa28dd54aff4",
+    "semantic_hash": "58d441b131d362315031fa28dd54aff4"
+  },
+  "internal/googlehealth/values.go": {
+    "mtime": 1785529631.4143267,
+    "ast_hash": "a35bdfdd494c3431218d96193bb4e992",
+    "semantic_hash": "a35bdfdd494c3431218d96193bb4e992"
+  },
+  "internal/googlehealth/wire.go": {
+    "mtime": 1785452940.539737,
+    "ast_hash": "9febad826624d1c3596508a3c9d740ce",
+    "semantic_hash": "9febad826624d1c3596508a3c9d740ce"
+  },
+  "internal/healthdata/healthdata.go": {
+    "mtime": 1785529631.4143267,
+    "ast_hash": "3a5383c572166a3e575361b3443ed365",
+    "semantic_hash": "3a5383c572166a3e575361b3443ed365"
+  },
+  "internal/paths/paths.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "767dddae780aa38b9339c7c239f33701",
+    "semantic_hash": "767dddae780aa38b9339c7c239f33701"
+  },
+  "internal/paths/paths_test.go": {
+    "mtime": 1785529631.4153273,
+    "ast_hash": "cedd1b3e942c88e2063443c52d58d28d",
+    "semantic_hash": "cedd1b3e942c88e2063443c52d58d28d"
+  },
+  "internal/syncengine/engine.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "e812b54df14ede8f6b6aba1989d77ce5",
+    "semantic_hash": "e812b54df14ede8f6b6aba1989d77ce5"
+  },
+  "internal/syncengine/engine_test.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "98f90c257791247438d4c8c2a71eb9ff",
+    "semantic_hash": "98f90c257791247438d4c8c2a71eb9ff"
+  },
+  "internal/syncengine/sqlstore.go": {
+    "mtime": 1785703540.3665502,
+    "ast_hash": "449c58608a22fb8ab38e5b5a5ef0c080",
+    "semantic_hash": "449c58608a22fb8ab38e5b5a5ef0c080"
+  },
+  "internal/syncengine/sqlstore_test.go": {
+    "mtime": 1785703540.3665502,
+    "ast_hash": "cd257a9c25b873e694e90648aee7e400",
+    "semantic_hash": "cd257a9c25b873e694e90648aee7e400"
+  },
+  "internal/web/account.go": {
+    "mtime": 1785703540.3665502,
+    "ast_hash": "9e903a499b20bf916f3b2ea400be4533",
+    "semantic_hash": "9e903a499b20bf916f3b2ea400be4533"
+  },
+  "internal/web/assets.go": {
+    "mtime": 1785458013.2736592,
+    "ast_hash": "666686a6dbe9d4a27f6cdaef2df443d1",
+    "semantic_hash": "666686a6dbe9d4a27f6cdaef2df443d1"
+  },
+  "internal/web/auth.go": {
+    "mtime": 1785703540.3675501,
+    "ast_hash": "e5115bc114e4784130555a230efea43c",
+    "semantic_hash": "e5115bc114e4784130555a230efea43c"
+  },
+  "internal/web/bodymeasurement.go": {
+    "mtime": 1785703540.3675501,
+    "ast_hash": "70fb5279cff141ee1251fee985ed5736",
+    "semantic_hash": "70fb5279cff141ee1251fee985ed5736"
+  },
+  "internal/web/cronometer.go": {
+    "mtime": 1785703540.3675501,
+    "ast_hash": "5d40e72fdd056442150748c1460f8ba9",
+    "semantic_hash": "5d40e72fdd056442150748c1460f8ba9"
+  },
+  "internal/web/data.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "a40d2a4abda347cb2bf99c8f5916789d",
+    "semantic_hash": "a40d2a4abda347cb2bf99c8f5916789d"
+  },
+  "internal/web/foodlog.go": {
+    "mtime": 1785703540.3685503,
+    "ast_hash": "ee31ba8f2fc4061a94cbbfd866f8f17a",
+    "semantic_hash": "ee31ba8f2fc4061a94cbbfd866f8f17a"
+  },
+  "internal/web/handlers.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "ab0ad457df84c03c2c80c5d34ceee5ba",
+    "semantic_hash": "ab0ad457df84c03c2c80c5d34ceee5ba"
+  },
+  "internal/web/journal.go": {
+    "mtime": 1785703540.3685503,
+    "ast_hash": "bf761f006149fc245b41adf01cd74c76",
+    "semantic_hash": "bf761f006149fc245b41adf01cd74c76"
+  },
+  "internal/web/routes.go": {
+    "mtime": 1785703540.3695505,
+    "ast_hash": "118c15d10ff09d6b171638974a8e5bfb",
+    "semantic_hash": "118c15d10ff09d6b171638974a8e5bfb"
+  },
+  "internal/web/server.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "c87cd759874f80b3b0ffd66cfda7c1f5",
+    "semantic_hash": "c87cd759874f80b3b0ffd66cfda7c1f5"
+  },
+  "internal/web/settings.go": {
+    "mtime": 1785703540.3695505,
+    "ast_hash": "50e3072a5e7214823d1d909243ac6069",
+    "semantic_hash": "50e3072a5e7214823d1d909243ac6069"
+  },
+  "internal/web/static/datastar.js": {
+    "mtime": 1785457439.9208806,
+    "ast_hash": "16ed4b2c0e317e705036f5d5e65b4650",
+    "semantic_hash": "16ed4b2c0e317e705036f5d5e65b4650"
+  },
+  "internal/web/views/account_templ.go": {
+    "mtime": 1785703540.3705502,
+    "ast_hash": "2efb59427f9cec6bf26df139582ad79a",
+    "semantic_hash": "2efb59427f9cec6bf26df139582ad79a"
+  },
+  "internal/web/views/activities_templ.go": {
+    "mtime": 1785535708.8976736,
+    "ast_hash": "d41806e9ab0fe915c71d5b2c619fce0b",
+    "semantic_hash": "d41806e9ab0fe915c71d5b2c619fce0b"
+  },
+  "internal/web/views/body_templ.go": {
+    "mtime": 1785486882.718969,
+    "ast_hash": "edfc6a4aa74d20d9a90433cf921b1335",
+    "semantic_hash": "edfc6a4aa74d20d9a90433cf921b1335"
+  },
+  "internal/web/views/chart.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "4c0b7cdc965c3ebc39649e30b8472585",
+    "semantic_hash": "4c0b7cdc965c3ebc39649e30b8472585"
+  },
+  "internal/web/views/connect_accounts_templ.go": {
+    "mtime": 1785703540.3705502,
+    "ast_hash": "43eb28cc8bbe243900007bc37ac42a49",
+    "semantic_hash": "43eb28cc8bbe243900007bc37ac42a49"
+  },
+  "internal/web/views/cronometer_templ.go": {
+    "mtime": 1785703540.3715503,
+    "ast_hash": "0e9760a7bde89ae37b5b9325f1bd4c74",
+    "semantic_hash": "0e9760a7bde89ae37b5b9325f1bd4c74"
+  },
+  "internal/web/views/dashboard_templ.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "4d6d1887938e7e1970fca99a41b9c4ae",
+    "semantic_hash": "4d6d1887938e7e1970fca99a41b9c4ae"
+  },
+  "internal/web/views/error_templ.go": {
+    "mtime": 1785458301.3317423,
+    "ast_hash": "5caa4db4b2458cbd8ea6162c008c1108",
+    "semantic_hash": "5caa4db4b2458cbd8ea6162c008c1108"
+  },
+  "internal/web/views/foodlog_templ.go": {
+    "mtime": 1785535708.8992257,
+    "ast_hash": "1da3d6cffd76415f389f54f68aaf65c3",
+    "semantic_hash": "1da3d6cffd76415f389f54f68aaf65c3"
+  },
+  "internal/web/views/helpers.go": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "9d55ebff3b0041ec6406809544d369a5",
+    "semantic_hash": "9d55ebff3b0041ec6406809544d369a5"
+  },
+  "internal/web/views/icons_templ.go": {
+    "mtime": 1785703540.3725512,
+    "ast_hash": "82e064c5e5dc53b05e5fd99c7194277f",
+    "semantic_hash": "82e064c5e5dc53b05e5fd99c7194277f"
+  },
+  "internal/web/views/journal_templ.go": {
+    "mtime": 1785530696.0526998,
+    "ast_hash": "8187a9f5865b335f2cc1f49e7bd2f2e8",
+    "semantic_hash": "8187a9f5865b335f2cc1f49e7bd2f2e8"
+  },
+  "internal/web/views/layout_templ.go": {
+    "mtime": 1785703540.3735502,
+    "ast_hash": "48887d686bd5f269bcfc4b0849a4bd56",
+    "semantic_hash": "48887d686bd5f269bcfc4b0849a4bd56"
+  },
+  "internal/web/views/login_templ.go": {
+    "mtime": 1785703540.3735502,
+    "ast_hash": "a27d149254b513e8450f80c1a0b627a5",
+    "semantic_hash": "a27d149254b513e8450f80c1a0b627a5"
+  },
+  "internal/web/views/models.go": {
+    "mtime": 1785703540.3735502,
+    "ast_hash": "197cad13592a895af5677c161955ea82",
+    "semantic_hash": "197cad13592a895af5677c161955ea82"
+  },
+  "internal/web/views/settings_templ.go": {
+    "mtime": 1785703540.3745508,
+    "ast_hash": "7915260a30e59478779579d58c80b34c",
+    "semantic_hash": "7915260a30e59478779579d58c80b34c"
+  },
+  "internal/web/views/signup_templ.go": {
+    "mtime": 1785703540.3745508,
+    "ast_hash": "9ffb0676317b3fd358dcfdf1eae783cc",
+    "semantic_hash": "9ffb0676317b3fd358dcfdf1eae783cc"
+  },
+  "internal/web/views/urls.go": {
+    "mtime": 1785703540.3745508,
+    "ast_hash": "a870aaa15e22686d19698f52af257b45",
+    "semantic_hash": "a870aaa15e22686d19698f52af257b45"
+  },
+  "internal/webauth/middleware.go": {
+    "mtime": 1785703540.3745508,
+    "ast_hash": "63812d694f202b458bad78ae39118a99",
+    "semantic_hash": "63812d694f202b458bad78ae39118a99"
+  },
+  "internal/webauth/sessions.go": {
+    "mtime": 1785703540.3755503,
+    "ast_hash": "746c23b66d2b911908c8e13660776550",
+    "semantic_hash": "746c23b66d2b911908c8e13660776550"
+  },
+  "internal/webauth/sessions_test.go": {
+    "mtime": 1785703540.3755503,
+    "ast_hash": "b6ac2b07279c502297284a4616017e47",
+    "semantic_hash": "b6ac2b07279c502297284a4616017e47"
+  },
+  "internal/webauth/users.go": {
+    "mtime": 1785703540.3755503,
+    "ast_hash": "c2c9cb6151f73b8aa2f19e8a22a59573",
+    "semantic_hash": "c2c9cb6151f73b8aa2f19e8a22a59573"
+  },
+  "internal/webauth/users_test.go": {
+    "mtime": 1785703540.3755503,
+    "ast_hash": "f6f6198668bbc84698afa2a7d5745cc6",
+    "semantic_hash": "f6f6198668bbc84698afa2a7d5745cc6"
+  },
+  "ARCHITECTURE.md": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "0d4aebf32a22d523453b2075bf88f1a8",
+    "semantic_hash": "0d4aebf32a22d523453b2075bf88f1a8"
+  },
+  "CLAUDE.md": {
+    "mtime": 1785703540.3595502,
+    "ast_hash": "b50b9d83b11465a43cbbf34ef90070c7",
+    "semantic_hash": "b50b9d83b11465a43cbbf34ef90070c7"
+  },
+  "README.md": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "4653ff2755be47ae1f2818f01d0e751c",
+    "semantic_hash": "4653ff2755be47ae1f2818f01d0e751c"
+  },
+  "cronometer-integration.md": {
+    "mtime": 1785581549.4704554,
+    "ast_hash": "ba3b3f1c77b380352384b5fb221228a1",
+    "semantic_hash": "ba3b3f1c77b380352384b5fb221228a1"
+  },
+  "prerequisite.md": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "0c8bb9decbf925caa0b7a2118a50145a",
+    "semantic_hash": "0c8bb9decbf925caa0b7a2118a50145a"
+  },
+  "structure.md": {
+    "mtime": 1785703694.9674394,
+    "ast_hash": "38cb141e96b0cc1fede66b402d792cb0",
+    "semantic_hash": "38cb141e96b0cc1fede66b402d792cb0"
+  }
+}

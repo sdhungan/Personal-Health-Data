@@ -99,36 +99,50 @@ func (s *DBSyncer) upsertDailySummary(ctx context.Context, sum healthdata.DailyS
 
 // upsertActiveMinutesByLevel replaces day's watch_active_minutes_by_level
 // rows (delete-then-insert — sync is the sole writer, no natural row key
-// beyond (day, level) to upsert against more granularly).
+// beyond (day, level) to upsert against more granularly). Wrapped in one
+// transaction so a failure partway through the insert loop rolls back the
+// delete too, instead of leaving the day with only some levels persisted.
 func (s *DBSyncer) upsertActiveMinutesByLevel(ctx context.Context, day string, rows []healthdata.ActiveMinutesByLevel) error {
-	if _, err := s.DB.ExecContext(ctx, `DELETE FROM watch_active_minutes_by_level WHERE user_id = ? AND day = ?`, s.UserID, day); err != nil {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM watch_active_minutes_by_level WHERE user_id = ? AND day = ?`, s.UserID, day); err != nil {
 		return fmt.Errorf("clearing watch_active_minutes_by_level for %s: %w", day, err)
 	}
 	for _, r := range rows {
-		if _, err := s.DB.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO watch_active_minutes_by_level (user_id, day, activity_level, minutes) VALUES (?, ?, ?, ?)
 		`, s.UserID, r.Day, r.Level, r.Minutes); err != nil {
 			return fmt.Errorf("inserting watch_active_minutes_by_level: %w", err)
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // upsertActiveZoneMinutesByZone replaces day's
 // watch_active_zone_minutes_by_zone rows (delete-then-insert, same
-// reasoning as upsertActiveMinutesByLevel).
+// reasoning as upsertActiveMinutesByLevel, same transaction wrapping).
 func (s *DBSyncer) upsertActiveZoneMinutesByZone(ctx context.Context, day string, rows []healthdata.ActiveZoneMinutesByZone) error {
-	if _, err := s.DB.ExecContext(ctx, `DELETE FROM watch_active_zone_minutes_by_zone WHERE user_id = ? AND day = ?`, s.UserID, day); err != nil {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM watch_active_zone_minutes_by_zone WHERE user_id = ? AND day = ?`, s.UserID, day); err != nil {
 		return fmt.Errorf("clearing watch_active_zone_minutes_by_zone for %s: %w", day, err)
 	}
 	for _, r := range rows {
-		if _, err := s.DB.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO watch_active_zone_minutes_by_zone (user_id, day, zone_type, minutes) VALUES (?, ?, ?, ?)
 		`, s.UserID, r.Day, r.ZoneType, r.Minutes); err != nil {
 			return fmt.Errorf("inserting watch_active_zone_minutes_by_zone: %w", err)
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // upsertHeartRateZoneMinutes upserts day's watch_heart_rate_zone_minutes
@@ -161,19 +175,26 @@ func (s *DBSyncer) upsertCaloriesByZone(ctx context.Context, rows []healthdata.C
 
 // upsertHeartRateZoneDefinitions replaces day's
 // watch_heart_rate_zone_definition rows (definitions drift, delete+insert
-// keeps stale zone types from lingering).
+// keeps stale zone types from lingering). Transaction-wrapped for the same
+// reason as upsertActiveMinutesByLevel.
 func (s *DBSyncer) upsertHeartRateZoneDefinitions(ctx context.Context, day string, rows []healthdata.HeartRateZoneDefinition) error {
-	if _, err := s.DB.ExecContext(ctx, `DELETE FROM watch_heart_rate_zone_definition WHERE user_id = ? AND day = ?`, s.UserID, day); err != nil {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM watch_heart_rate_zone_definition WHERE user_id = ? AND day = ?`, s.UserID, day); err != nil {
 		return fmt.Errorf("clearing watch_heart_rate_zone_definition for %s: %w", day, err)
 	}
 	for _, r := range rows {
-		if _, err := s.DB.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO watch_heart_rate_zone_definition (user_id, day, zone_type, min_bpm, max_bpm) VALUES (?, ?, ?, ?, ?)
 		`, s.UserID, r.Day, r.ZoneType, r.MinBpm, r.MaxBpm); err != nil {
 			return fmt.Errorf("inserting watch_heart_rate_zone_definition: %w", err)
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // upsertHourlySteps upserts day's watch_steps_hourly buckets.
@@ -240,32 +261,48 @@ func (s *DBSyncer) upsertCoreBodyTemperatureSamples(ctx context.Context, rows []
 }
 
 // upsertActivityLevelSegments replaces day's watch_activity_level_segment
-// rows (delete-then-insert, same reasoning as upsertActiveMinutesByLevel).
+// rows (delete-then-insert, same reasoning and transaction wrapping as
+// upsertActiveMinutesByLevel).
 func (s *DBSyncer) upsertActivityLevelSegments(ctx context.Context, day string, rows []healthdata.ActivityLevelSegment) error {
-	if _, err := s.DB.ExecContext(ctx, `DELETE FROM watch_activity_level_segment WHERE user_id = ? AND day = ?`, s.UserID, day); err != nil {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM watch_activity_level_segment WHERE user_id = ? AND day = ?`, s.UserID, day); err != nil {
 		return fmt.Errorf("clearing watch_activity_level_segment for %s: %w", day, err)
 	}
 	for _, r := range rows {
-		if _, err := s.DB.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO watch_activity_level_segment (user_id, day, activity_level, start_time, end_time) VALUES (?, ?, ?, ?, ?)
 		`, s.UserID, r.Day, r.Level, r.StartTime.Format(time.RFC3339), r.EndTime.Format(time.RFC3339)); err != nil {
 			return fmt.Errorf("inserting watch_activity_level_segment: %w", err)
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // upsertSleepSession writes sess into watch_sleep_session and replaces its
 // stage timeline, returning the session's row id (needed to attach
-// per-stage respiratory rate later in the same sync pass).
+// per-stage respiratory rate later in the same sync pass). All three
+// statements (session upsert, stage delete, stage inserts) share one
+// transaction so a failure partway through the stage insert loop can never
+// leave a session row with a stale or partial stage timeline.
 func (s *DBSyncer) upsertSleepSession(ctx context.Context, sess healthdata.SleepSession, stages []healthdata.SleepStage) (int64, error) {
 	isMainInt := 0
 	if sess.IsMainSleep {
 		isMainInt = 1
 	}
 
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+
 	var id int64
-	err := s.DB.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO watch_sleep_session (
 			user_id, day, start_time, end_time, is_main_sleep, duration_minutes,
 			efficiency_pct, minutes_awake, minutes_light, minutes_deep, minutes_rem
@@ -288,15 +325,18 @@ func (s *DBSyncer) upsertSleepSession(ctx context.Context, sess healthdata.Sleep
 		return 0, fmt.Errorf("upserting watch_sleep_session: %w", err)
 	}
 
-	if _, err := s.DB.ExecContext(ctx, `DELETE FROM watch_sleep_stage WHERE sleep_session_id = ?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM watch_sleep_stage WHERE sleep_session_id = ?`, id); err != nil {
 		return 0, fmt.Errorf("clearing old sleep stages: %w", err)
 	}
 	for _, stage := range stages {
-		if _, err := s.DB.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO watch_sleep_stage (sleep_session_id, stage_type, start_time, end_time) VALUES (?, ?, ?, ?)
 		`, id, stage.StageType, stage.StartTime.Format(time.RFC3339), stage.EndTime.Format(time.RFC3339)); err != nil {
 			return 0, fmt.Errorf("inserting sleep stage: %w", err)
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("committing watch_sleep_session: %w", err)
 	}
 	return id, nil
 }

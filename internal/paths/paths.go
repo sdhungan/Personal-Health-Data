@@ -144,9 +144,7 @@ func (p *Paths) CronometerCredentialsFile() string {
 func (p *Paths) CronometerSessionFile() string {
 	return filepath.Join(p.ConfigDir(), "cronometer_session.json.enc")
 }
-func (p *Paths) SyncLogFile() string   { return filepath.Join(p.LogsDir(), "sync.log") }
-func (p *Paths) ServerLogFile() string { return filepath.Join(p.LogsDir(), "server.log") }
-func (p *Paths) DBKeyFile() string     { return filepath.Join(p.KeysDir(), "db.key") }
+func (p *Paths) DBKeyFile() string { return filepath.Join(p.KeysDir(), "db.key") }
 
 // UsersKeysDir/UsersConfigDir group every per-user secret under its own
 // subdirectory of the existing keys/ and config/ trees, parallel to the
@@ -237,36 +235,6 @@ func EnsureParentDir(path string) error {
 		return fmt.Errorf("creating %s: %w", dir, err)
 	}
 	return nil
-}
-
-// SafeJoin joins base and name, guaranteeing the result stays inside base.
-// It rejects absolute inputs and any ".." segment that would escape base.
-// Use this wherever a path component comes from external input (config
-// values, future per-record attachment names, etc.) rather than being one
-// of the fixed accessors above.
-func SafeJoin(base, name string) (string, error) {
-	if strings.TrimSpace(name) == "" {
-		return "", errors.New("path must not be empty")
-	}
-	if filepath.IsAbs(name) {
-		return "", fmt.Errorf("path %q must be relative", name)
-	}
-
-	baseAbs, err := filepath.Abs(base)
-	if err != nil {
-		return "", fmt.Errorf("resolving base %q: %w", base, err)
-	}
-	joined := filepath.Join(baseAbs, name)
-
-	rel, err := filepath.Rel(baseAbs, joined)
-	if err != nil {
-		return "", fmt.Errorf("resolving %q relative to %q: %w", name, base, err)
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %q escapes base directory %q", name, base)
-	}
-
-	return joined, nil
 }
 
 // ExternalOutputPath resolves a user-supplied destination path that is

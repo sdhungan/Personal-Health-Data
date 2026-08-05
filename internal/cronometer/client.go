@@ -253,3 +253,185 @@ func (c *Client) GetMetrics(ctx context.Context, sess *Session) ([]Metric, error
 	}
 	return out.Metrics, nil
 }
+
+// ------------------------------------------------------------------
+// Write endpoints (DOCUMENTED, not CONFIRMED — see values.go's "Write
+// endpoints" section for what that distinction means here).
+// ------------------------------------------------------------------
+
+// FindFood searches Cronometer's own food database by name — the grounding
+// step for an LLM-identified ingredient (see internal/web's photo-log flow):
+// resolve a candidate match here, then GetFoods for its full per-100g
+// nutrient profile.
+func (c *Client) FindFood(ctx context.Context, sess *Session, query string) ([]FoodSearchResult, error) {
+	data, err := c.call(ctx, sess, "/api/v2/find_food", map[string]any{
+		"query":   query,
+		"tab":     "ALL",
+		"sources": []string{"All"},
+		"config":  map[string]any{"newSearch": true, "newSpellcheck": true, "call_version": 1},
+	})
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Foods []FoodSearchResult `json:"foods"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decoding find_food response: %w", err)
+	}
+	return out.Foods, nil
+}
+
+// CreateCustomFood defines a new food in the account's own food database
+// with an explicit nutrient profile, and returns its new food ID. nutrients
+// follows the same per-100g convention internal/cronometer.Food.Nutrients
+// already uses for reads (see nutritionAmountsFromFood in nutrients.go) —
+// reusing FoodNutrient rather than a new type. measureName/measureGrams
+// define the food's one default measure (e.g. ("g", 1.0) for a plain
+// gram-based measure) — AddServing's own "grams" field controls the actual
+// logged quantity regardless of which measure is selected, so this measure
+// only needs to be valid, not meaningful.
+func (c *Client) CreateCustomFood(ctx context.Context, sess *Session, name string, measureName string, measureGrams float64, nutrients []FoodNutrient) (int64, error) {
+	nutrientPayload := make([]map[string]any, len(nutrients))
+	for i, n := range nutrients {
+		nutrientPayload[i] = map[string]any{"id": n.ID, "amount": n.Amount}
+	}
+
+	data, err := c.call(ctx, sess, "/api/v2/add_food", map[string]any{
+		"data": map[string]any{
+			"id":               0,
+			"name":             name,
+			"category":         0,
+			"owner":            nil,
+			"retired":          nil,
+			"source":           nil,
+			"defaultMeasureId": 0,
+			"comments":         nil,
+			"alternateId":      nil,
+			"measures": []map[string]any{
+				{"id": 0, "name": measureName, "value": measureGrams, "amount": 1.0, "type": "Atomic"},
+			},
+			"labelType":  "AMERICAN_2016",
+			"nutrients":  nutrientPayload,
+			"properties": map[string]any{},
+			"foodTags":   []string{},
+		},
+		"config": map[string]any{"call_version": 1},
+	})
+	if err != nil {
+		return 0, err
+	}
+	var out struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return 0, fmt.Errorf("decoding add_food response: %w", err)
+	}
+	return out.ID, nil
+}
+
+// ServingEntry is the input to AddServing — one Serving-type diary entry to
+// log. Day is "YYYY-MM-DD" (zero-padded, the same dateLayout GetDiary
+// already uses — CONFIRMED 2026-08-05 via cmd/cronoverify; the original
+// DOCUMENTED claim of non-zero-padded "YYYY-M-D" was never actually
+// exercised and turned out unnecessary, add_serving accepts the standard
+// zero-padded form fine); Time is "HH:MM:SS".
+type ServingEntry struct {
+	Day       string
+	Time      string
+	FoodID    int64
+	MeasureID int64
+	Grams     float64
+}
+
+// AddServing logs a Serving-type diary entry — the actual "push to
+// Cronometer" step for the photo-log flow. Returns the new entry's serving
+// ID (needed if the caller wants to remove it later via DeleteEntries) —
+// CONFIRMED int64 against a real account on 2026-08-05 (via cmd/cronoverify;
+// the original DOCUMENTED guess of a string-typed id was wrong: the real
+// add_serving response's "id" is a JSON number, matching
+// DiaryEntry.ServingID's type on the read side exactly — there is no
+// read/write type asymmetry here after all).
+func (c *Client) AddServing(ctx context.Context, sess *Session, e ServingEntry) (int64, error) {
+	data, err := c.call(ctx, sess, "/api/v2/add_serving", map[string]any{
+		"serving": map[string]any{
+			"order":         0,
+			"day":           e.Day,
+			"time":          e.Time,
+			"offset":        nil,
+			"source":        nil,
+			"userId":        sess.UserID,
+			"servingId":     nil,
+			"type":          "Serving",
+			"foodId":        e.FoodID,
+			"measureId":     e.MeasureID,
+			"grams":         e.Grams,
+			"translationId": 0,
+		},
+		"config": map[string]any{"call_version": 2},
+	})
+	if err != nil {
+		return 0, err
+	}
+	var out struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return 0, fmt.Errorf("decoding add_serving response: %w", err)
+	}
+	return out.ID, nil
+}
+
+// DiaryEntryRef identifies one diary entry to remove via DeleteEntries.
+// ServingID is int64 — CONFIRMED 2026-08-05, see AddServing's doc comment.
+type DiaryEntryRef struct {
+	ServingID int64
+	FoodID    int64
+	MeasureID int64
+	Grams     float64
+}
+
+// DeleteEntries removes one or more diary entries via the v3 API — the only
+// endpoint observed using header-based auth (x-crono-session) rather than
+// this package's usual JSON-body auth (see call), so it builds its own
+// request instead of going through call/post. Used to clean up a throwaway
+// entry during write-endpoint verification, and potentially a future "undo"
+// affordance on the dashboard.
+func (c *Client) DeleteEntries(ctx context.Context, sess *Session, entries []DiaryEntryRef) error {
+	type diaryEntry struct {
+		ServingID int64   `json:"servingId"`
+		FoodID    int64   `json:"foodId"`
+		MeasureID int64   `json:"measureId"`
+		Grams     float64 `json:"grams"`
+	}
+	payload := struct {
+		DiaryEntries []diaryEntry `json:"diaryEntries"`
+	}{DiaryEntries: make([]diaryEntry, len(entries))}
+	for i, e := range entries {
+		payload.DiaryEntries[i] = diaryEntry{ServingID: e.ServingID, FoodID: e.FoodID, MeasureID: e.MeasureID, Grams: e.Grams}
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshaling delete_entries request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/v3/user/%d/diary-entries", BaseURL, sess.UserID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("building delete_entries request: %w", err)
+	}
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("x-crono-session", sess.Token)
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("calling delete_entries: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		return &APIError{StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(respBody))}
+	}
+	return nil
+}

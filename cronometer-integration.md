@@ -1,7 +1,9 @@
 # Cronometer integration — how it works
 
 Reference doc for the Cronometer side of this codebase — the client, auth,
-sync engine, and UI, all built and in use as of 2026-08-01. See also
+sync engine, and UI, originally built 2026-08-01, extended 2026-08-05 with
+write-endpoint verification and the MCP food-logging connector (see
+`ARCHITECTURE.md` §11 for the connector's own design). See also
 `prerequisite.md` (general project gotchas) and `structure.md` (repo
 layout). This used to be a handoff/TODO doc written before any of this
 existed; that plan is done, this describes what actually got built —
@@ -34,9 +36,24 @@ because a wrong guess doesn't error, it silently decodes to a zero value.
   responses to disk for a real account, the same discipline the Google
   Health work used to build `values.go` against real data instead of
   guesses.
+- **`cmd/cronoverify`** — a second diagnostic tool (2026-08-05), unlike
+  `cronodump` in that it calls `internal/cronometer.Client`'s actual typed
+  methods directly rather than raw requests, since its job is confirming
+  those methods work as coded, not discovering new shapes. Round-trips
+  every write endpoint (`find_food` → `add_food` → `get_foods` →
+  `add_serving` → `get_diary` → `delete_entries` → `get_diary`) against a
+  real account, printing a PASS/FAIL line per step — see "Write endpoints"
+  below for what it found.
 - **`internal/cronometer/client.go`** — `Client.Login`, `GetDiary`,
   `GetFoods`, `GetNutritionScores`, `GetMetrics` — thin wrappers over the
-  mobile API's `POST /api/v2/*` endpoints.
+  mobile API's `POST /api/v2/*` endpoints. Also `FindFood`, `CreateCustomFood`,
+  `AddServing`, `DeleteEntries` — the write endpoints, see below.
+- **`internal/cronometer/actions.go`** (2026-08-05) — `DBSyncer.SearchFood`/
+  `CreateCustomFood`/`LogServing`/`Diary`/`DeleteServing`, built on the write
+  endpoints above plus `DBSyncer`'s existing login/retry machinery. Backs
+  `internal/mcpserver`'s tools (see `ARCHITECTURE.md` §11) — not called by
+  the sync path (`SyncDay`) at all, these are a separate, additive action
+  surface for pushing data *to* Cronometer rather than pulling it.
 - **`internal/cronometer/session.go`** — `Credentials`/`Session` types,
   `SaveCredentials`/`LoadCredentials`/`SaveSession`/`LoadSession` (all via
   `internal/crypto`, same AES-256-GCM primitive the Google OAuth tokens and
@@ -79,6 +96,42 @@ because a wrong guess doesn't error, it silently decodes to a zero value.
   button, which runs Google Health and Cronometer sync in parallel
   goroutines for the selected day.
 
+## Write endpoints (2026-08-05)
+
+`find_food`, `add_food`, `add_serving`, `delete_entries` were originally
+transcribed from a reference project (`rwestergren/cronometer-api-mcp`) as
+"DOCUMENTED, not CONFIRMED" — never decoded from a real response the way
+the read side above was. `cmd/cronoverify` verified them against a real
+account:
+
+- **`find_food`/`add_food`/`get_foods`-immediately-after-`add_food`**: all
+  CONFIRMED clean on the first run. A freshly created custom food's measure
+  ID is reliably resolvable via `get_foods` right away — no propagation
+  delay observed.
+- **`add_serving`'s day format**: CONFIRMED to accept the same zero-padded
+  `"YYYY-MM-DD"` `GetDiary` already uses (`dateLayout` in `sync.go`). The
+  original DOCUMENTED claim of non-padded `"YYYY-M-D"` was never actually
+  exercised and turned out unnecessary.
+- **`add_serving`'s response `"id"` field**: found and fixed a real bug the
+  first live run caught — it's a JSON **number**, not the string the
+  original DOCUMENTED guess assumed. `Client.AddServing` now returns
+  `int64`, matching `DiaryEntry.ServingID`'s type on the read side exactly
+  — there is no read/write type asymmetry here after all, just a wrong
+  initial guess. `DiaryEntryRef.ServingID` (the `delete_entries` input) is
+  `int64` too, for consistency, though that specific field's real wire
+  shape hasn't been independently exercised yet (see below).
+- **`delete_entries`**: still not actually confirmed end to end. The
+  verification run that would have reached it failed one step earlier, at
+  the `add_serving` decode bug above; the throwaway custom food + serving
+  it created were cleaned up manually via the Cronometer app instead of
+  through this code path. Treat `DeleteEntries`/`DiaryEntryRef` as
+  DOCUMENTED, not CONFIRMED, until a clean `cmd/cronoverify` pass actually
+  reaches and exercises it.
+
+This is the same day the MCP food-logging connector (`internal/mcpserver`,
+`healthd mcp`) started using these endpoints for real — see
+`ARCHITECTURE.md` §11.
+
 ## Data model
 
 Five tables, matching Cronometer's own export categories exactly:
@@ -93,7 +146,12 @@ comparable at daily vs. per-entry granularity.
   is a numeric ID with no confirmed name catalog captured yet; storing the
   raw number would just be a meaningless value in the UI.
 - `cronometer_serving.meal_group` stays NULL — never observed as a usable
-  field on a diary entry via this API.
+  field on a diary entry via this API. This is also why the MCP connector's
+  `cronometer_log_serving` tool treats "meal" (breakfast/lunch/dinner/snack)
+  as a *time-of-day default* rather than a real field to send — Cronometer
+  buckets diary entries into meal groups by clock time against boundaries
+  configured in the account's own settings, not a per-entry value this API
+  exposes (see `ARCHITECTURE.md` §11's "Meal categorization" paragraph).
 - `cronometer_note` stays entirely unpopulated — no `"Note"` diary entry
   type was observed in the real dump this was built against. Whether
   Cronometer's notes feature is reachable via this API at all is still

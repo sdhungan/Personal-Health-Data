@@ -62,7 +62,7 @@ func buildFoodLogTile(ctx context.Context, db *sql.DB, userID int64, t views.Til
 			s.TimeLabel = ts.Format("3:04 PM")
 		}
 		if quantityValue.Valid && quantityUnits.Valid {
-			s.QuantityLabel = fmt.Sprintf("%.0f %s", quantityValue.Float64, quantityUnits.String)
+			s.QuantityLabel = fmt.Sprintf("%s %s", views.FormatQuantity(quantityValue.Float64), quantityUnits.String)
 		}
 		if proteinG.Valid {
 			v := proteinG.Float64
@@ -113,7 +113,7 @@ func fetchFoodServingDetail(ctx context.Context, db *sql.DB, userID, id int64) (
 		d.TimeLabel = ts.Format("3:04 PM")
 	}
 	if quantityValue.Valid && quantityUnits.Valid {
-		d.QuantityLabel = fmt.Sprintf("%.0f %s", quantityValue.Float64, quantityUnits.String)
+		d.QuantityLabel = fmt.Sprintf("%s %s", views.FormatQuantity(quantityValue.Float64), quantityUnits.String)
 	}
 	return &d, nil
 }

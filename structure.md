@@ -23,7 +23,7 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
 ├── cmd/
 │   ├── healthd/main.go     # package main — the only entrypoint, calls cli.Execute()
 │   ├── cronodump/          # diagnostic dump tool for Cronometer's API (mirrors googlehealth's dump.go), kept as a real tool
-│   └── tmpinspect/         # scratch DB-inspection tool (not part of the product; ad hoc dev use only)
+│   └── cronoverify/        # round-trips Cronometer's write endpoints (find_food/add_food/add_serving/delete_entries) against a real account — cronometer-integration.md's designated way to confirm DeleteEntries, still open
 └── internal/
     ├── paths/       # package paths   — resolves --root and every file/dir path under it
     ├── config/      # package config  — config.yaml (port, sync interval, Google creds; Cronometer creds live encrypted, not here)
@@ -32,10 +32,11 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
     ├── healthdata/  # package healthdata — dependency-free domain structs mirroring watch_* tables, shared by googlehealth (writer) and web (reader)
     ├── googleauth/  # package googleauth — OAuth2 local-redirect flow, encrypted token storage, auto-refreshing http.Client
     ├── googlehealth/# package googlehealth — Google Health API client, data-type definitions, sync engine (DBSyncer), one-shot diagnostic dump
-    ├── cronometer/  # package cronometer — mobile-API client, session/credential handling, sync engine (DBSyncer)
+    ├── cronometer/  # package cronometer — mobile-API client, session/credential handling, sync engine (DBSyncer), food search/logging action methods (actions.go)
     ├── syncengine/  # package syncengine — source-agnostic day-completeness state machine (pending/partial/complete/missing), scoped per user (SQLStore.UserID)
     ├── webauth/     # package webauth  — dashboard accounts/sessions: CreateUser/Authenticate (bcrypt + per-user Argon2id credential key), CreateSession/LookupSession (24h sliding cookie session), Echo middleware
-    ├── cli/         # package cli     — Cobra command tree (root/sync/auth/db/serve/user), shared *paths.Paths
+    ├── mcpserver/   # package mcpserver — MCP tool layer over cronometer.DBSyncer's action methods (search/log/create/diary/delete), thin glue only — see ARCHITECTURE.md §11
+    ├── cli/         # package cli     — Cobra command tree (root/sync/auth/db/serve/user/mcp), shared *paths.Paths
     └── web/         # package web     — Echo server + dashboard (see below)
         └── views/   # package views  — templ components + their Go view-model structs; no DB access here
 ```
@@ -62,15 +63,28 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
   handlers to read). See `ARCHITECTURE.md` §10.
 - **`internal/cli`** — Cobra command tree. `root.go` resolves `--root` once
   (`PersistentPreRunE`) into a shared `appPaths *paths.Paths` every
-  subcommand file (`sync.go`, `auth.go`, `db.go`, `serve.go`,
+  subcommand file (`sync.go`, `auth.go`, `db.go`, `serve.go`, `mcp.go`,
   `googlehealthsync.go`, `cronometersync.go`, `service.go`) reads from.
+  `mcp.go` (`newMCPCmd`) follows `auth.go`'s exact `--user`/`resolveUserID`/
+  `webauth.CredentialKey` pattern to build a `cronometer.DBSyncer` for one
+  account, then hands it to `mcpserver.New(...).Run(...)` on a stdio
+  transport — see `ARCHITECTURE.md` §11.
   `googlehealthsync.go`/`cronometersync.go` each hold one
   `run<Source>SyncOnce(ctx)` helper, called from both `sync.go` (one-shot
   manual trigger) and `service.go`'s scheduler — the same function either
   way, not duplicated. `service.go` also handles the
   `--action=install/start/stop/uninstall` OS-service lifecycle for both the
   scheduler (root `--action`) and the web dashboard (`serve --action`,
-  registered as a separate service) — both still stubbed, see their TODOs.
+  registered as a separate service, default names `healthDSafal`/
+  `healthDSafal-web`, both overridable via `--service-name`) via
+  `github.com/kardianos/service` — `newHostedService` builds the
+  registration, `runServiceAction`/`runServeServiceAction` call
+  `service.Control` for install/start/stop/uninstall, and
+  `runHostedScheduler`/`runHostedServe` are what actually run when the OS
+  service manager (not a terminal — `service.Interactive()` is false) starts
+  the installed service, driving `runForegroundCtx`/`runServeForegroundCtx`
+  through kardianos's own `Start`/`Stop` lifecycle instead of the plain
+  signal handling `runForeground`/`runServeForeground` use interactively.
   **`serve` and the bare scheduler are two separate processes** — there's no
   single command that runs both together yet (see `ARCHITECTURE.md` §2).
 - **`internal/paths`** — the *only* place that builds a path under `--root`
@@ -86,7 +100,12 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
   `ARCHITECTURE.md`'s "five fixed representation shapes" section for how the
   `watch_*` tables are organized), `Store` (the encrypted-DB lifecycle:
   `Init`/`Open`/`Checkpoint`/`Close`/`Discard`, see `store.go`'s doc
-  comments for the raw/working-file dance), `dump.go` (plaintext `.sql`
+  comments for the raw/working-file dance — `removeWorkingFile` in
+  particular, for why it renames the working file to a private temp name
+  before touching its content rather than zeroing in place: a real incident
+  2026-08-05, see `ARCHITECTURE.md` §11's multi-process paragraph and
+  `store_test.go`'s `TestCloseLeavesSharedWorkingFileIntactWhenStillOpen`),
+  `dump.go` (plaintext `.sql`
   export for `healthd db decrypt`), `migrations.go` (the mechanism —
   `Migrations` ordered list applied via `Store.migrate()`, tracked by
   `PRAGMA user_version` — but currently **empty**: this project's `watch_*`
@@ -131,9 +150,23 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
   (Cronometer's numeric nutrient-ID → column mapping), `sync.go`/
   `sync_upsert.go` (`DBSyncer.SyncDay`, matching `googlehealth`'s shape so
   both sources implement the same `syncengine.DaySyncer` interface without
-  either package importing `syncengine` directly). See
-  `cronometer-integration.md` for the full picture — auth flow, credential
-  storage, data model, known gaps.
+  either package importing `syncengine` directly), `actions.go`
+  (`DBSyncer.SearchFood`/`CreateCustomFood`/`LogServing`/`Diary`/
+  `DeleteServing` — food search/logging methods built on the same
+  `withRetry`/session-refresh machinery `SyncDay` already uses, backing
+  `internal/mcpserver`'s tools; `NutrientProfile` is the ~9-field
+  nutrition-label subset these return, distinct from `NutritionAmounts`'
+  full ~64-column set). See `cronometer-integration.md` for the full
+  picture — auth flow, credential storage, data model, known gaps.
+- **`internal/mcpserver`** — thin MCP tool layer over one
+  `cronometer.DBSyncer` (`server.go`'s `New(syncer) *mcp.Server`, via
+  `github.com/modelcontextprotocol/go-sdk/mcp`): `cronometer_search_food`,
+  `cronometer_log_serving`, `cronometer_create_custom_food`,
+  `cronometer_get_diary`, `cronometer_delete_serving`. No business logic —
+  every tool handler just converts between `internal/cronometer`'s types and
+  the tool's JSON in/out structs, serialized behind one `sync.Mutex` since
+  an MCP client can fire concurrent tool calls but `DBSyncer` itself isn't
+  safe for that. See `ARCHITECTURE.md` §11.
 - **`internal/syncengine`** — `engine.go` (the day-completeness state
   machine: `pending → partial → complete/missing`, shared by every source),
   `sqlstore.go` (`sync_state` table read/write). `googlehealth.DBSyncer` and
@@ -180,15 +213,22 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
     `CreateSession`, plain full-page POST+redirect, no Datastar) and the
     post-signup onboarding flow (`/onboarding/connect`,
     `handleOnboardingConnectGoogle`/`handleOnboardingConnectCronometer`/
-    `handleOnboardingSkip`) — Google's reuses
-    `googleauth.RunConsentFlow` unchanged; Cronometer's shares
+    `handleOnboardingSkip`) — Google's shares `connectGoogle`
+    (`googleauth.RunConsentFlow` + save token + activate syncer) with
+    `settings.go`'s `handleGoogleClientConnectAccount`, connecting isn't
+    onboarding-only (added 2026-08-05); Cronometer's shares
     `connectCronometer` (verify-then-save-then-activate) with
     `cronometer.go`'s `handleCronometerLogin`, the dashboard's own ongoing
     account-settings card.
-  - `settings.go` — the app-wide Google OAuth client upload page
-    (`/settings/google-client`, `handleGoogleClientSettingsPage`/
-    `handleGoogleClientUpload`) — not per-user, see `account.go` for the
-    per-account settings page.
+  - `settings.go` — `/settings/google-client`: the app-wide Google OAuth
+    client upload form (`handleGoogleClientSettingsPage`/
+    `handleGoogleClientUpload`, not per-user — see `account.go` for the
+    per-account settings page) *and*, right below it on the same page, a
+    "Connect Google Health" action for the currently logged-in account
+    (`handleGoogleClientConnectAccount`, calling `connectGoogle` in
+    `auth.go`) — added 2026-08-05 so fixing a missing/broken client and
+    connecting your own account don't require a detour through
+    `/onboarding/connect`.
   - `account.go` — the per-account settings page (`/settings/account`,
     `handleAccountSettingsPage`) and self-service account deletion
     (`handleAccountDelete`: re-verifies the account password, calls
@@ -196,6 +236,11 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
     `cronoSyncers`, clears the session cookie, redirects to
     `/login?deleted=1`) — always scoped to `webauth.CurrentUserID(c)`, never
     a request parameter.
+  - `mcp_connector.go` — `/settings/mcp-connector`
+    (`handleMCPConnectorPage`), a static per-account page showing the
+    `claude mcp add`/`.mcp.json` snippet to wire up `healthd mcp` for this
+    account (built from `Server.ExecutablePath`, `Paths.Root()`, and the
+    logged-in username) — no entry form, see `ARCHITECTURE.md` §11.
   - `data.go` — the Google-Health-side stat-tile data layer:
     `dashboardDailyRow` (embeds `healthdata.DailySummary` plus the Cronometer
     macro/energy columns the dashboard also shows — a web-layer composite,
@@ -246,7 +291,8 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
     (account login card), `journal.templ`, `login.templ`/`signup.templ`
     (plain POST+redirect auth forms), `settings.templ` (Google OAuth client
     upload page), `account.templ` (per-account settings + delete-account
-    form), `connect_accounts.templ` (post-signup onboarding page),
+    form), `mcp_connector.templ` (Claude connector setup page, static),
+    `connect_accounts.templ` (post-signup onboarding page),
     `icons.templ` (inline SVG icon set), `chart.go` (server-side SVG chart
     rendering — bar chart with optional goal line, line chart, and segment
     timeline, all sharing one hover-tooltip mechanism — no client-side
@@ -254,7 +300,10 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
     reference, all built through `APIURL`; `initialSignals` seeds the
     dashboard's root Datastar signals including `userMenuOpen`),
     `helpers.go` (formatting: `FormatMinutes`, `FormatNumber`,
-    `humanizeExerciseType`). Each `X.templ` has a generated, do-not-edit
+    `FormatQuantity` — a food serving's quantity_value with just enough
+    precision to stay meaningful (2 decimals, trailing zeros trimmed); a
+    plain `%.0f` here used to round anything under 0.5 down to "0", fixed
+    2026-08-05 — `humanizeExerciseType`). Each `X.templ` has a generated, do-not-edit
     `X_templ.go` sibling.
 
 ## Data flow in one line

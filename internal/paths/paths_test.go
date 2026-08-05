@@ -86,8 +86,6 @@ func TestAccessorsNestUnderRoot(t *testing.T) {
 		"GoogleOAuthFile":           p.GoogleOAuthFile(),
 		"CronometerCredentialsFile": p.CronometerCredentialsFile(),
 		"CronometerSessionFile":     p.CronometerSessionFile(),
-		"SyncLogFile":               p.SyncLogFile(),
-		"ServerLogFile":             p.ServerLogFile(),
 		"DBKeyFile":                 p.DBKeyFile(),
 	}
 
@@ -140,29 +138,6 @@ func TestEnsureDirsCreatesStructureWithOwnerOnlyPerms(t *testing.T) {
 	// Calling it again on an already-populated root must not error.
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatalf("EnsureDirs (second call): %v", err)
-	}
-}
-
-func TestSafeJoin(t *testing.T) {
-	base := filepath.Join(t.TempDir(), "base")
-
-	if got, err := SafeJoin(base, "sub/file.txt"); err != nil {
-		t.Errorf("SafeJoin valid relative path: unexpected error: %v", err)
-	} else if want := filepath.Join(base, "sub", "file.txt"); got != want {
-		t.Errorf("SafeJoin = %q, want %q", got, want)
-	}
-
-	badInputs := []string{
-		"",
-		"  ",
-		"../escape.txt",
-		"sub/../../escape.txt",
-		filepath.Join(base, "abs.txt"),
-	}
-	for _, in := range badInputs {
-		if _, err := SafeJoin(base, in); err == nil {
-			t.Errorf("SafeJoin(%q): expected error, got none", in)
-		}
 	}
 }
 

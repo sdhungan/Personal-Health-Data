@@ -64,6 +64,37 @@ no error, check for this before assuming the code itself is broken.
   the change, every time — running the old binary after "successfully"
   building looks identical (no error) but silently serves stale behavior.
   Bit this exact project more than once already.
+- **`term.ReadPassword` fails over this harness's non-interactive shell tool**
+  (`healthd auth cronometer`, `healthd user create`, `cmd/cronodump`,
+  `cmd/cronoverify` all use it) — piped/non-TTY stdin errors with "the
+  handle is invalid" on Windows. Any command that needs a real password
+  prompt has to be run by the human in their own interactive terminal, not
+  by an agent through this tool. For smoke-testing plumbing *around* such a
+  command without a real password, seed a scratch DB directly instead (a
+  small throwaway Go program calling `webauth.CreateUser` +
+  `cronometer.SaveCredentials` with fake credentials — see the MCP connector
+  work, 2026-08-05).
+- **Piping a fixed batch of newline-delimited JSON-RPC requests into an MCP
+  stdio server (`healthd mcp`) and closing stdin immediately (`cat file |
+  program`) can race the server's write of the last response(s) before it
+  sees EOF and exits** — the earlier requests' responses may never reach
+  stdout. Hold stdin open a beat longer (`{ cat file; sleep 3; } | program`)
+  when smoke-testing a stdio MCP server this way.
+- **Real incident, 2026-08-05: running `healthd serve` and a `healthd mcp`
+  connector concurrently against the same `--root` destroyed a real
+  account's data**, via a bug now fixed in `internal/db/store.go`'s
+  `removeWorkingFile` (see `ARCHITECTURE.md`'s MCP connector §11 for the
+  full account and the regression test that catches it). The practical
+  takeaway if this ever resurfaces on some other Windows path: a `healthd
+  mcp` subprocess exiting while `healthd serve` is still running against
+  the same root used to zero the *shared* working DB file out from under
+  the still-running server (Windows allows a concurrent write even when it
+  blocks the delete that follows) — and the running server's own next
+  periodic checkpoint then persisted those zeros into the encrypted backup
+  too, with no recovery path. If `healthd serve` (or anything) suddenly
+  errors with `file is not a database (26)` after a `healthd mcp` process
+  exited nearby, that's this class of bug — check `removeWorkingFile`
+  hasn't regressed before assuming it's something else.
 - `bin/` (and therefore `bin/explore-root/`) is gitignored — nothing under it
   is tracked, so it's safe to treat as disposable/local, but it's also the
   only place real-shaped data exists to test against. `bin/google-health-dump/`
@@ -323,6 +354,41 @@ pages (see "Multi-user accounts" below and `ARCHITECTURE.md` §10), a
 light/dark theme toggle, and a consolidated header user-menu dropdown
 replacing three separate inline controls — see the "Web dashboard auth/UI
 session" findings above for the specific bugs this surfaced and fixed.
+
+## OS-service lifecycle (`--action`), implemented 2026-08-05
+
+`--action=install/start/stop/uninstall` (root command and `serve`, see
+`internal/cli/service.go`/`serve.go`) is real now, via
+`github.com/kardianos/service` — no longer the printed-TODO stub earlier
+docs described. A few things worth knowing before touching this code again:
+
+- **Installing a service needs elevated privileges.** On Windows, a
+  non-Administrator shell gets a clean `Access is denied` error from
+  `service.Control` (confirmed live on this machine) — not a bug, just the
+  OS enforcing service-registry access. On Linux, the equivalent is
+  root/an account that can write systemd or sysv units. This can't be
+  worked around and shouldn't be "fixed" — it's the correct behavior to
+  surface as-is with context, not swallow.
+- **The re-invocation arguments matter.** `newHostedService`'s `Arguments`
+  always bakes in an explicit `--root` (and `--service-name`, and for
+  `serve`, `--google-client-secret` if one was given at install time) —
+  the account a service runs under (a Windows service account, or
+  root/systemd) won't share the interactive user's home directory, so
+  relying on `--root`'s `~/.healthd` default would silently point the
+  installed service at the wrong root.
+- **`service.Interactive()` is the load-bearing check**, not something to
+  remove as dead code: it's false only when the process was actually
+  launched by the OS service manager (SCM on Windows, systemd/sysv-parent
+  detection on Linux) rather than a terminal. That branch is what routes
+  into `runHostedScheduler`/`runHostedServe` (kardianos's own `Run()`,
+  which on Windows performs the service-control-dispatcher handshake a
+  hosted service must complete within seconds of starting, or the SCM
+  kills it as unresponsive) instead of the plain signal-driven
+  `runForeground`/`runServeForeground` used for everyday interactive runs.
+  Getting this branch wrong (e.g. always going one way) either breaks
+  normal terminal use or breaks the installed service on Windows
+  specifically — it won't show up as a failure on Linux, since a plain
+  blocking process happens to satisfy systemd's expectations too.
 
 ## Still-open, deliberately-not-fixed gaps
 

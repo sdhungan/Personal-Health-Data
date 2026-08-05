@@ -227,18 +227,47 @@ func (s *Store) Discard() error {
 // leveling, filesystem journaling, etc. can retain copies) — it narrows the
 // window, which is the honest limit of the pure-Go, no-CGO approach chosen
 // over a page-encrypting SQLCipher driver.
+//
+// Detaches path under a private temp name FIRST, before touching its
+// content, rather than zeroing path in place and only then trying to
+// remove it. This isn't just tidiness: it's a safety probe. More than one
+// healthd process can legitimately share a root at once now (`healthd
+// serve` alongside one or more `healthd mcp` connector instances, see
+// ARCHITECTURE.md §11) — each opens its own *sql.DB against the same
+// workPath, and SQLite's WAL mode is explicitly chosen to make that safe
+// for ordinary reads/writes. But a rename away from path fails on Windows
+// exactly when another process still has an open handle to it (the same
+// sharing rule that blocks deleting an open file) — unlike a plain
+// zero-write, which Windows happily allows concurrently even when a
+// rename/delete would be refused. The original code zeroed path in place
+// before ever attempting to remove it, so a failed remove (another process
+// still had it open) only surfaced *after* that process's live data was
+// already destroyed — confirmed by a real incident: a `healthd mcp`
+// process exiting while `healthd serve` was still running zeroed the
+// shared working file out from under it, and `healthd serve`'s own next
+// periodic Checkpoint then faithfully encrypted those zeros over the
+// on-disk backup too, leaving nothing to recover. Renaming first turns
+// "someone else still needs this" into a clean, harmless error instead —
+// path is left completely untouched when that happens.
 func removeWorkingFile(path string) error {
-	if info, err := os.Stat(path); err == nil {
-		if f, ferr := os.OpenFile(path, os.O_WRONLY, 0o600); ferr == nil {
+	tmp := path + ".removing"
+	if err := os.Rename(path, tmp); err != nil {
+		return fmt.Errorf("working file %s appears to still be in use by another healthd process (leaving it in place, not touching its contents): %w", path, err)
+	}
+
+	if info, err := os.Stat(tmp); err == nil {
+		if f, ferr := os.OpenFile(tmp, os.O_WRONLY, 0o600); ferr == nil {
 			zeros := make([]byte, info.Size())
 			_, _ = f.WriteAt(zeros, 0)
 			_ = f.Sync()
 			_ = f.Close()
 		}
 	}
-	// WAL mode leaves -wal/-shm sidecar files alongside the main one;
-	// best-effort clean those up too so nothing plaintext lingers.
+	// WAL mode leaves -wal/-shm sidecar files alongside the main one; only
+	// safe to clean those up once the rename above has confirmed no other
+	// process still holds the main file (they share the same lock/handle
+	// lifecycle under WAL).
 	_ = os.Remove(path + "-wal")
 	_ = os.Remove(path + "-shm")
-	return os.Remove(path)
+	return os.Remove(tmp)
 }

@@ -1,0 +1,55 @@
+package views
+
+// MCPConnectorPage explains how to wire this healthd instance into Claude
+// Code/Desktop as a local MCP server (see internal/cli/mcp.go,
+// internal/mcpserver) — purely static setup info, no entry form: the point
+// of the MCP connector is that natural-language/photo food logging happens
+// in Claude's own chat, never in this dashboard. cliSnippet/jsonSnippet are
+// pre-built by handleMCPConnectorPage (already substituted with this
+// account's own executable path/root/username); cronometerConnected drives
+// the readiness banner, since these tools have nothing to write to until
+// Cronometer is connected.
+templ MCPConnectorPage(username, cliSnippet, jsonSnippet string, cronometerConnected bool) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>Claude connector — Personal Health Dashboard</title>
+			@themeScript()
+			<link rel="stylesheet" href="/static/style.css"/>
+		</head>
+		<body>
+			<main class="auth-page auth-page-wide">
+				<h1 class="brand-title">Claude connector</h1>
+				<p>
+					Log food by describing meals — or a photo — to Claude in a normal
+					chat, using whatever Claude subscription you already have. This
+					runs a local MCP server (<code>healthd mcp</code>) that Claude Code
+					or Claude Desktop spawns as a subprocess over stdio — no network
+					port, nothing reachable off this machine. Claude does all the food
+					identification and macro estimation itself; this server only
+					searches Cronometer's real food database and logs the result, so
+					most items match something that already exists there instead of
+					creating a new custom food every time.
+				</p>
+
+				if cronometerConnected {
+					<p class="body-saved-status">&#10003; Cronometer is connected for { username } — these tools are ready to use.</p>
+				} else {
+					<p class="journal-error">Cronometer isn't connected yet for { username } — connect it from Account settings first; these tools have nothing to write to until then.</p>
+				}
+
+				<p>Run once, from a terminal on this machine:</p>
+				<pre class="connector-snippet">{ cliSnippet }</pre>
+
+				<p>Or add it by hand to Claude Desktop's <code>claude_desktop_config.json</code> (or this project's <code>.mcp.json</code>):</p>
+				<pre class="connector-snippet">{ jsonSnippet }</pre>
+
+				<p>Then just start a chat and describe what you ate.</p>
+
+				<p><a href="/">&larr; Back to dashboard</a></p>
+			</main>
+		</body>
+	</html>
+}
