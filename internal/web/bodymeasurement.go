@@ -91,10 +91,21 @@ func fetchBodyMeasurement(ctx context.Context, db *sql.DB, userID int64, day str
 	return b, nil
 }
 
-// navyBodyFatPercentMale estimates body fat % via the U.S. Navy circumference
-// method (male variant: waist/neck/height only). Returns false when the
-// inputs can't produce a valid estimate (waist <= neck makes the first log10
-// non-positive).
+// navyBodyFatPercentMale estimates body fat % via the direct-%BF-regression
+// form of the Navy circumference method (male variant: waist/neck/height
+// only) — the equation DoD Instruction 1308.3 specifies as the actual
+// current Army/Navy/Marine Corps standard: a 1999 Hodgdon & Friedl
+// re-regression against %BF directly (R=0.903, SEE=3.52), not the older
+// 1984 Hodgdon-Beckett formula that predicts body density and converts via
+// Siri's equation (%BF = 495/D - 450) — the two are different regressions
+// fit at different times, not the same formula in different notation; they
+// diverge by several points away from an "average" build. See
+// https://pmc.ncbi.nlm.nih.gov/articles/PMC4831679/, which confirms this is
+// the equation actually implemented per DoDI 1308.3 and the one DEXA
+// validation studies test.
+//
+// Returns false when the inputs can't produce a valid estimate (waist <=
+// neck makes log10 of a non-positive number).
 //
 // ponytail: male-only. schema.sql already anticipates a female variant
 // (user_profile.sex + body_measurement.hip_cm, formula uses waist+hip-neck
@@ -102,22 +113,16 @@ func fetchBodyMeasurement(ctx context.Context, db *sql.DB, userID int64, day str
 // branch would be unreachable dead code today. Add it — plus a hip_cm form
 // field and a sex control somewhere in settings — together, the day a female
 // account actually needs this.
-// The formula's constants (495, 450, 1.0324, ...) were fit against
-// measurements in inches — every column behind waistCm/neckCm/heightCm here
-// is centimeters (schema.sql), so this converts before applying them.
-// Feeding cm straight into the inch-calibrated constants doesn't blow up
-// (log10 damps the unit mismatch to a roughly-constant offset rather than a
-// wild swing) which is exactly what makes it dangerous: the output still
-// looks like a plausible body-fat percentage, just a systematically wrong
-// one.
 func navyBodyFatPercentMale(waistCm, neckCm, heightCm float64) (float64, bool) {
+	// Like the density form this replaced, the equation's constants (86.010,
+	// 70.041, 36.76) were fit against measurements in inches.
 	const cmPerInch = 2.54
 	waistIn, neckIn, heightIn := waistCm/cmPerInch, neckCm/cmPerInch, heightCm/cmPerInch
 	diff := waistIn - neckIn
 	if diff <= 0 || heightIn <= 0 {
 		return 0, false
 	}
-	pct := 495/(1.0324-0.19077*math.Log10(diff)+0.15456*math.Log10(heightIn)) - 450
+	pct := 86.010*math.Log10(diff) - 70.041*math.Log10(heightIn) + 36.76
 	return pct, true
 }
 
@@ -320,25 +325,28 @@ func fetchBodyMeasurementHistory(ctx context.Context, db *sql.DB, userID int64, 
 // buildBodyMeasurementChart mirrors buildChart's (data.go) 7-day bar-chart
 // shape, just keyed by a plain day->value map instead of dashboardDailyRow +
 // an Extract func — not worth generalizing buildChart itself for the one
-// table living outside dashboardDailyRow.
+// table living outside dashboardDailyRow. Unlike buildChart, the average is
+// divided by the number of days that actually have a value, not a flat 7 —
+// body measurements are filled in by hand, so a week with 3 of 7 days
+// logged should average those 3, not silently treat the other 4 as zero.
 func buildBodyMeasurementChart(day time.Time, history map[string]float64) *views.ChartData {
 	c := &views.ChartData{}
 	var total float64
-	any := false
+	var count int
 	for i := 6; i >= 0; i-- {
 		d := day.AddDate(0, 0, -i)
 		v, ok := history[d.Format(dateLayout)]
 		if ok {
 			total += v
-			any = true
+			count++
 		}
 		c.Labels = append(c.Labels, d.Format("Mon"))
 		c.Values = append(c.Values, v)
 	}
-	if !any {
+	if count == 0 {
 		return nil
 	}
 	c.Total = total
-	c.Average = total / 7
+	c.Average = total / float64(count)
 	return c
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -127,8 +128,15 @@ func buildDashboardData(ctx context.Context, db *sql.DB, userID int64, day time.
 // an empty "No X recorded" placeholder — so the page only shows metrics
 // this account/watch actually produces. Body Measurements is exempt: it's
 // an input form, not a read-only stat, so it always needs to stay
-// reachable even before anything's been entered.
+// reachable even before anything's been entered. bodyDerivedTileKinds
+// (weight/waist/neck/body_fat) are exempt for the same reason as each
+// other: they're the permanent read-only companions to that always-visible
+// form, and hiding them on a day nothing was typed in would also hide the
+// only way to reach their "Expand" button and see the past week's trend.
 func shouldHideEmptyTile(t views.TileData) bool {
+	if slices.Contains(bodyDerivedTileKinds, t.Metric) {
+		return false
+	}
 	switch t.Kind {
 	case views.TileKindBody:
 		return false
