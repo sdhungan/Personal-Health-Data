@@ -11,8 +11,8 @@ import (
 	"golang.org/x/term"
 
 	"github.com/sdhungan/Personal-Health-Data/internal/config"
-	"github.com/sdhungan/Personal-Health-Data/internal/crypto"
 	"github.com/sdhungan/Personal-Health-Data/internal/cronometer"
+	"github.com/sdhungan/Personal-Health-Data/internal/crypto"
 	"github.com/sdhungan/Personal-Health-Data/internal/db"
 	"github.com/sdhungan/Personal-Health-Data/internal/googleauth"
 	"github.com/sdhungan/Personal-Health-Data/internal/webauth"

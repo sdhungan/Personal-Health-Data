@@ -220,57 +220,89 @@ func latestPriorValue(ctx context.Context, db *sql.DB, userID int64, day, column
 	return &v, nil
 }
 
-// buildBodyFatTile loads day's body-fat % as a read-only stat tile — same
-// collapsed-sparkline/expanded-chart shape every other metric tile uses
-// (buildStatTile in data.go), but with its own small history query since
-// v_body_measurement isn't part of dashboardDailyRow (that composite stays
-// Google-Health/Cronometer only, see data.go's own doc comment). Value is
+// bodyMeasurementStatDef configures one read-only stat tile sourced from
+// v_body_measurement — weight/waist/neck/body-fat all share the same
+// single-value-plus-7-day-graph shape buildStatTile (data.go) already gives
+// every watch_daily_summary metric (e.g. Resting Heart Rate); this is that
+// same shape for the one set of metrics living outside dashboardDailyRow.
+// Column is always one of the fixed literals below, never request input —
+// see fetchBodyMeasurementHistory's own comment on why building its query
+// with fmt.Sprintf is still injection-safe.
+type bodyMeasurementStatDef struct {
+	Column   string
+	Title    string
+	Unit     string
+	EmptyMsg string
+}
+
+var bodyMeasurementStatDefs = map[string]bodyMeasurementStatDef{
+	"weight": {Column: "weight_kg", Title: "Weight", Unit: "kg", EmptyMsg: "Enter weight above"},
+	"waist":  {Column: "waist_cm", Title: "Waist", Unit: "cm", EmptyMsg: "Enter waist above"},
+	"neck":   {Column: "neck_cm", Title: "Neck", Unit: "cm", EmptyMsg: "Enter neck above"},
+	"body_fat": {
+		Column: "body_fat_pct", Title: "Body Fat %", Unit: "%",
+		EmptyMsg: "Enter waist, neck & height above to calculate",
+	},
+}
+
+// buildBodyMeasurementStatTile loads day's value for one bodyMeasurementStatDefs
+// entry as a read-only stat tile — same collapsed-sparkline/expanded-chart
+// shape every other metric tile uses (buildStatTile in data.go), but with
+// its own small history query since v_body_measurement isn't part of
+// dashboardDailyRow (that composite stays Google-Health/Cronometer only, see
+// data.go's own doc comment). body_fat's value in particular is
 // v_body_measurement.body_fat_pct: a smart scale's own direct reading
 // (body_fat_pct_raw) if one's ever synced, else our own Navy-method estimate
 // (body_fat_pct_calculated, written by saveBodyMeasurement).
-func buildBodyFatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
+func buildBodyMeasurementStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, kind string, day time.Time, expanded bool) (views.TileData, error) {
+	def := bodyMeasurementStatDefs[kind]
 	t.Kind = views.TileKindStat
-	t.Title = "Body Fat %"
+	t.Title = def.Title
 	t.Icon = "body"
 	t.Category = "body"
-	t.Unit = "%"
+	t.Unit = def.Unit
 
-	history, err := fetchBodyFatHistory(ctx, db, userID, day)
+	history, err := fetchBodyMeasurementHistory(ctx, db, userID, day, def.Column)
 	if err != nil {
 		return t, err
 	}
 
 	dayStr := day.Format(dateLayout)
-	if pct, ok := history[dayStr]; ok {
-		t.BigValue = fmt.Sprintf("%.1f", pct)
+	if v, ok := history[dayStr]; ok {
+		t.BigValue = fmt.Sprintf("%.1f", v)
 	} else {
 		t.Empty = true
-		t.EmptyMsg = "Enter waist, neck & height above to calculate"
+		t.EmptyMsg = def.EmptyMsg
 	}
 
-	chart := buildBodyFatChart(day, history)
+	chart := buildBodyMeasurementChart(day, history)
 	if chart != nil {
 		t.SparklineValues = chart.Values
 	}
 	if expanded && chart != nil {
 		t.Chart = chart
 		t.BigValue = fmt.Sprintf("%.1f", chart.Average)
-		t.ChartSubtext = fmt.Sprintf("7-day average: %s%%", t.BigValue)
+		t.ChartSubtext = fmt.Sprintf("7-day average: %s %s", t.BigValue, def.Unit)
 		t.Empty = false
 	}
 	return t, nil
 }
 
-// fetchBodyFatHistory returns day->body_fat_pct for the 7 days ending on day.
-func fetchBodyFatHistory(ctx context.Context, db *sql.DB, userID int64, day time.Time) (map[string]float64, error) {
+// fetchBodyMeasurementHistory returns day->value of column (a
+// v_body_measurement column) for the 7 days ending on day. column always
+// comes from bodyMeasurementStatDefs, a fixed internal literal set — never
+// request input — so building the query with fmt.Sprintf here carries no
+// injection risk, same discipline latestPriorValue already applies.
+func fetchBodyMeasurementHistory(ctx context.Context, db *sql.DB, userID int64, day time.Time, column string) (map[string]float64, error) {
 	start := day.AddDate(0, 0, -6).Format(dateLayout)
 	end := day.Format(dateLayout)
-	rows, err := db.QueryContext(ctx, `
-		SELECT day, body_fat_pct FROM v_body_measurement
-		WHERE user_id = ? AND day BETWEEN ? AND ? AND body_fat_pct IS NOT NULL
-	`, userID, start, end)
+	query := fmt.Sprintf(`
+		SELECT day, %s FROM v_body_measurement
+		WHERE user_id = ? AND day BETWEEN ? AND ? AND %s IS NOT NULL
+	`, column, column)
+	rows, err := db.QueryContext(ctx, query, userID, start, end)
 	if err != nil {
-		return nil, fmt.Errorf("querying v_body_measurement body_fat_pct for %s..%s: %w", start, end, err)
+		return nil, fmt.Errorf("querying v_body_measurement %s for %s..%s: %w", column, start, end, err)
 	}
 	defer rows.Close()
 	out := map[string]float64{}
@@ -285,11 +317,11 @@ func fetchBodyFatHistory(ctx context.Context, db *sql.DB, userID int64, day time
 	return out, rows.Err()
 }
 
-// buildBodyFatChart mirrors buildChart's (data.go) 7-day bar-chart shape,
-// just keyed by a plain day->value map instead of dashboardDailyRow + an
-// Extract func — not worth generalizing buildChart itself for one extra
-// caller.
-func buildBodyFatChart(day time.Time, history map[string]float64) *views.ChartData {
+// buildBodyMeasurementChart mirrors buildChart's (data.go) 7-day bar-chart
+// shape, just keyed by a plain day->value map instead of dashboardDailyRow +
+// an Extract func — not worth generalizing buildChart itself for the one
+// table living outside dashboardDailyRow.
+func buildBodyMeasurementChart(day time.Time, history map[string]float64) *views.ChartData {
 	c := &views.ChartData{}
 	var total float64
 	any := false

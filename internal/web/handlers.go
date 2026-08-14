@@ -18,8 +18,8 @@ import (
 
 	"github.com/sdhungan/Personal-Health-Data/internal/googleauth"
 	"github.com/sdhungan/Personal-Health-Data/internal/syncengine"
-	"github.com/sdhungan/Personal-Health-Data/internal/webauth"
 	"github.com/sdhungan/Personal-Health-Data/internal/web/views"
+	"github.com/sdhungan/Personal-Health-Data/internal/webauth"
 )
 
 func parseDay(c echo.Context) time.Time {
@@ -90,8 +90,8 @@ func buildDashboardData(ctx context.Context, db *sql.DB, userID int64, day time.
 			t, err = buildActivitiesTile(ctx, db, userID, t, day, t.Expanded)
 		case kind == "body":
 			t, err = buildBodyTile(ctx, db, userID, t, day)
-		case kind == "body_fat":
-			t, err = buildBodyFatTile(ctx, db, userID, t, day, t.Expanded)
+		case kind == "weight" || kind == "waist" || kind == "neck" || kind == "body_fat":
+			t, err = buildBodyMeasurementStatTile(ctx, db, userID, t, kind, day, t.Expanded)
 		case kind == "hr_zones":
 			t, err = buildHeartRateZonesTile(ctx, db, userID, t, day, t.Expanded)
 		case kind == "active_minutes_by_level":
@@ -210,8 +210,8 @@ func (s *Server) handleTile(c echo.Context) error {
 		t, err = buildActivitiesTile(ctx, s.DB, userID, t, day, expanded)
 	case kind == "body":
 		t, err = buildBodyTile(ctx, s.DB, userID, t, day)
-	case kind == "body_fat":
-		t, err = buildBodyFatTile(ctx, s.DB, userID, t, day, expanded)
+	case kind == "weight" || kind == "waist" || kind == "neck" || kind == "body_fat":
+		t, err = buildBodyMeasurementStatTile(ctx, s.DB, userID, t, kind, day, expanded)
 	// hr_zones was missing from this switch even before this pass (found
 	// and flagged as an out-of-scope bug earlier this session) — fixed here
 	// since active_minutes_by_level/active_zone_minutes_by_zone/
@@ -565,16 +565,20 @@ func (s *Server) handleBodyMeasurementCarryForward(c echo.Context) error {
 	return s.patchBodyTile(sse, ctx, userID, day, "Carried forward from a previous day")
 }
 
-// patchBodyTile re-fetches and patches #tile-body, then #tile-body_fat, after
-// a save/carry-forward — the same "rebuild the one tile, patch it" shape
-// handleTile uses, just for two tiles since Body Fat % is derived from the
-// same waist/neck/height fields this save just touched. If body_fat was
-// hidden entirely on the last full page/day-view load (nothing to calculate
-// yet — see shouldHideEmptyTile), this patch targets a #tile-body_fat that
-// doesn't exist in the DOM and silently no-ops; it only reappears on the
-// next full view load. Not worth restructuring this handler's single/dual-
-// tile patch into a full buildDashboardData rebuild just for that one-time
-// transition.
+// bodyDerivedTileKinds are every read-only stat tile whose value comes from
+// the same body_measurement row the Body Measurements form just saved —
+// patchBodyTile refreshes all of them alongside the form itself.
+var bodyDerivedTileKinds = []string{"weight", "waist", "neck", "body_fat"}
+
+// patchBodyTile re-fetches and patches #tile-body, then each of
+// bodyDerivedTileKinds — the same "rebuild the one tile, patch it" shape
+// handleTile uses, just repeated since weight/waist/neck/body_fat are all
+// derived from the same fields this save just touched. If a derived tile was
+// hidden entirely on the last full page/day-view load (nothing to show yet
+// — see shouldHideEmptyTile), this patch targets a #tile-<kind> that doesn't
+// exist in the DOM and silently no-ops; it only reappears on the next full
+// view load. Not worth restructuring this handler's per-tile patches into a
+// full buildDashboardData rebuild just for that one-time transition.
 func (s *Server) patchBodyTile(sse *datastar.ServerSentEventGenerator, ctx context.Context, userID int64, day, savedAt string) error {
 	dayTime, err := time.ParseInLocation(dateLayout, day, time.Local)
 	if err != nil {
@@ -592,12 +596,17 @@ func (s *Server) patchBodyTile(sse *datastar.ServerSentEventGenerator, ctx conte
 		return err
 	}
 
-	bft := views.TileData{ID: "tile-body_fat", Metric: "body_fat"}
-	bft, err = buildBodyFatTile(ctx, s.DB, userID, bft, dayTime, false)
-	if err != nil {
-		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
+	for _, kind := range bodyDerivedTileKinds {
+		dt := views.TileData{ID: "tile-" + kind, Metric: kind}
+		dt, err = buildBodyMeasurementStatTile(ctx, s.DB, userID, dt, kind, dayTime, false)
+		if err != nil {
+			return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
+		}
+		if err := sse.PatchElementTempl(views.Tile(dt, day)); err != nil {
+			return err
+		}
 	}
-	return sse.PatchElementTempl(views.Tile(bft, day))
+	return nil
 }
 
 // parseOptionalFloatRaw converts a Datastar signal value that may arrive as
