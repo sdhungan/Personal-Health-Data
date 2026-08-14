@@ -16,6 +16,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/starfederation/datastar-go/datastar"
 
+	"github.com/sdhungan/Personal-Health-Data/internal/googleauth"
 	"github.com/sdhungan/Personal-Health-Data/internal/syncengine"
 	"github.com/sdhungan/Personal-Health-Data/internal/webauth"
 	"github.com/sdhungan/Personal-Health-Data/internal/web/views"
@@ -89,6 +90,8 @@ func buildDashboardData(ctx context.Context, db *sql.DB, userID int64, day time.
 			t, err = buildActivitiesTile(ctx, db, userID, t, day, t.Expanded)
 		case kind == "body":
 			t, err = buildBodyTile(ctx, db, userID, t, day)
+		case kind == "body_fat":
+			t, err = buildBodyFatTile(ctx, db, userID, t, day, t.Expanded)
 		case kind == "hr_zones":
 			t, err = buildHeartRateZonesTile(ctx, db, userID, t, day, t.Expanded)
 		case kind == "active_minutes_by_level":
@@ -207,6 +210,8 @@ func (s *Server) handleTile(c echo.Context) error {
 		t, err = buildActivitiesTile(ctx, s.DB, userID, t, day, expanded)
 	case kind == "body":
 		t, err = buildBodyTile(ctx, s.DB, userID, t, day)
+	case kind == "body_fat":
+		t, err = buildBodyFatTile(ctx, s.DB, userID, t, day, expanded)
 	// hr_zones was missing from this switch even before this pass (found
 	// and flagged as an out-of-scope bug earlier this session) — fixed here
 	// since active_minutes_by_level/active_zone_minutes_by_zone/
@@ -358,6 +363,17 @@ func (s *Server) handleForceSync(c echo.Context) error {
 	select {
 	case res := <-done:
 		if res.err != nil {
+			if googleauth.IsInvalidGrant(res.err) {
+				// The refresh token behind the cached syncer is permanently
+				// dead (expired/revoked at Google, or the token file was
+				// already deleted by savingTokenSource.Token() on this same
+				// error) — evict it so userGoogleSyncer stops reporting
+				// "connected" everywhere else (settings page, onboarding)
+				// and the reconnect button reappears without a service
+				// restart.
+				s.setGoogleSyncer(userID, nil)
+				return sse.PatchElementTempl(views.ErrorFragment("Google Health access expired or was revoked — reconnect it from Settings → Google OAuth client."))
+			}
 			return sse.PatchElementTempl(views.ErrorFragment("force sync failed: " + res.err.Error()))
 		}
 		return s.patchCurrentView(sse, context.Background(), userID, day, dayStr, view)
@@ -510,6 +526,7 @@ func (s *Server) handleBodyMeasurementSave(c echo.Context) error {
 	// both shapes (and a JSON null, just in case) rather than assuming one.
 	var signals struct {
 		BMWeight json.RawMessage `json:"bmweight"`
+		BMHeight json.RawMessage `json:"bmheight"`
 		BMWaist  json.RawMessage `json:"bmwaist"`
 		BMNeck   json.RawMessage `json:"bmneck"`
 	}
@@ -521,9 +538,10 @@ func (s *Server) handleBodyMeasurementSave(c echo.Context) error {
 	}
 
 	weight := parseOptionalFloatRaw(signals.BMWeight)
+	height := parseOptionalFloatRaw(signals.BMHeight)
 	waist := parseOptionalFloatRaw(signals.BMWaist)
 	neck := parseOptionalFloatRaw(signals.BMNeck)
-	if err := saveBodyMeasurement(ctx, s.DB, userID, day, weight, waist, neck); err != nil {
+	if err := saveBodyMeasurement(ctx, s.DB, userID, day, weight, height, waist, neck); err != nil {
 		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
 	}
 	return s.patchBodyTile(sse, ctx, userID, day, "Saved "+time.Now().Format("15:04:05"))
@@ -547,8 +565,16 @@ func (s *Server) handleBodyMeasurementCarryForward(c echo.Context) error {
 	return s.patchBodyTile(sse, ctx, userID, day, "Carried forward from a previous day")
 }
 
-// patchBodyTile re-fetches and patches #tile-body after a save/carry-forward
-// — the same "rebuild the one tile, patch it" shape handleTile uses.
+// patchBodyTile re-fetches and patches #tile-body, then #tile-body_fat, after
+// a save/carry-forward — the same "rebuild the one tile, patch it" shape
+// handleTile uses, just for two tiles since Body Fat % is derived from the
+// same waist/neck/height fields this save just touched. If body_fat was
+// hidden entirely on the last full page/day-view load (nothing to calculate
+// yet — see shouldHideEmptyTile), this patch targets a #tile-body_fat that
+// doesn't exist in the DOM and silently no-ops; it only reappears on the
+// next full view load. Not worth restructuring this handler's single/dual-
+// tile patch into a full buildDashboardData rebuild just for that one-time
+// transition.
 func (s *Server) patchBodyTile(sse *datastar.ServerSentEventGenerator, ctx context.Context, userID int64, day, savedAt string) error {
 	dayTime, err := time.ParseInLocation(dateLayout, day, time.Local)
 	if err != nil {
@@ -562,7 +588,16 @@ func (s *Server) patchBodyTile(sse *datastar.ServerSentEventGenerator, ctx conte
 	if t.Body != nil {
 		t.Body.SavedAt = savedAt
 	}
-	return sse.PatchElementTempl(views.Tile(t, day))
+	if err := sse.PatchElementTempl(views.Tile(t, day)); err != nil {
+		return err
+	}
+
+	bft := views.TileData{ID: "tile-body_fat", Metric: "body_fat"}
+	bft, err = buildBodyFatTile(ctx, s.DB, userID, bft, dayTime, false)
+	if err != nil {
+		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
+	}
+	return sse.PatchElementTempl(views.Tile(bft, day))
 }
 
 // parseOptionalFloatRaw converts a Datastar signal value that may arrive as

@@ -2,7 +2,7 @@ package views
 
 import "fmt"
 
-// bodyTileBody renders the always-visible Body Measurements form: three
+// bodyTileBody renders the always-visible Body Measurements form: four
 // number inputs bound via Datastar (save on change, mirroring the journal
 // autosave pattern but for discrete fields instead of one debounced
 // textarea) plus a "Carry forward" button that only appears when there's
@@ -10,13 +10,19 @@ import "fmt"
 // straight into the value attribute (like journal.templ's textarea seeds
 // data-bind:journalcontent from its own inner content) rather than via a
 // separate data-signals declaration — data-bind alone picks that up as the
-// signal's starting value.
+// signal's starting value. Height feeds the Body Fat % tile below (see
+// bodymeasurement.go's navyBodyFatPercentMale) alongside waist/neck — it has
+// no dedicated tile of its own the way weight might.
 templ bodyTileBody(t TileData) {
 	if t.Body != nil {
 		<div class="body-form">
 			<div class="body-field">
 				<label for="bm-weight">Weight (kg)</label>
 				<input id="bm-weight" type="number" step="0.1" inputmode="decimal" value={ numberAttr(t.Body.WeightKg) } data-bind:bmweight data-on:change={ postExpr(bodyMeasurementSaveURL(t.Body.Day)) }/>
+			</div>
+			<div class="body-field">
+				<label for="bm-height">Height (cm)</label>
+				<input id="bm-height" type="number" step="0.1" inputmode="decimal" value={ numberAttr(t.Body.HeightCm) } data-bind:bmheight data-on:change={ postExpr(bodyMeasurementSaveURL(t.Body.Day)) }/>
 			</div>
 			<div class="body-field">
 				<label for="bm-waist">Waist (cm)</label>

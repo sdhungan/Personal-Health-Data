@@ -1,6 +1,9 @@
 package googleauth
 
 import (
+	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -105,5 +108,69 @@ func TestSavingTokenSourceOnlyPersistsOnChange(t *testing.T) {
 		if saved.AccessToken != want {
 			t.Errorf("call %d: persisted AccessToken = %q, want %q", i, saved.AccessToken, want)
 		}
+	}
+}
+
+func TestIsInvalidGrant(t *testing.T) {
+	grantErr := &oauth2.RetrieveError{ErrorCode: "invalid_grant", ErrorDescription: "Token has been expired or revoked."}
+	wrapped := fmt.Errorf("calling GET https://x: %w", fmt.Errorf("refreshing Google access token: %w", grantErr))
+	if !IsInvalidGrant(wrapped) {
+		t.Error("IsInvalidGrant(wrapped invalid_grant) = false, want true")
+	}
+
+	other := &oauth2.RetrieveError{ErrorCode: "invalid_client"}
+	if IsInvalidGrant(other) {
+		t.Error("IsInvalidGrant(invalid_client) = true, want false")
+	}
+	if IsInvalidGrant(errors.New("some other failure")) {
+		t.Error("IsInvalidGrant(plain error) = true, want false")
+	}
+	if IsInvalidGrant(nil) {
+		t.Error("IsInvalidGrant(nil) = true, want false")
+	}
+}
+
+// failingTokenSource always fails a refresh with the given error.
+type failingTokenSource struct{ err error }
+
+func (f *failingTokenSource) Token() (*oauth2.Token, error) { return nil, f.err }
+
+func TestSavingTokenSourceDeletesFileOnInvalidGrant(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "google_oauth.json.enc")
+	key := testKey()
+	if err := SaveToken(path, key, &oauth2.Token{AccessToken: "stale"}); err != nil {
+		t.Fatalf("SaveToken: %v", err)
+	}
+
+	src := &savingTokenSource{
+		base: &failingTokenSource{err: &oauth2.RetrieveError{ErrorCode: "invalid_grant"}},
+		path: path,
+		key:  key,
+	}
+	if _, err := src.Token(); err == nil {
+		t.Fatal("Token(): expected error, got none")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("token file still exists after invalid_grant, stat err = %v", err)
+	}
+}
+
+func TestSavingTokenSourceKeepsFileOnOtherErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "google_oauth.json.enc")
+	key := testKey()
+	if err := SaveToken(path, key, &oauth2.Token{AccessToken: "still-good"}); err != nil {
+		t.Fatalf("SaveToken: %v", err)
+	}
+
+	src := &savingTokenSource{
+		base: &failingTokenSource{err: errors.New("temporary network blip")},
+		path: path,
+		key:  key,
+	}
+	if _, err := src.Token(); err == nil {
+		t.Fatal("Token(): expected error, got none")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("token file should survive a non-invalid_grant error, stat err = %v", err)
 	}
 }

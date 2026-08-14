@@ -3,6 +3,7 @@ package googleauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -59,9 +60,34 @@ type savingTokenSource struct {
 	lastSeen string
 }
 
+// IsInvalidGrant reports whether err is (or wraps, per errors.As) an oauth2
+// invalid_grant response — Google's signal that a refresh token is dead
+// (expired, revoked from myaccount.google.com, or issued to an OAuth client
+// that no longer exists) rather than a transient failure. There is no retry
+// that fixes this; the only way forward is a fresh consent flow. Callers
+// that cache a built syncer/client keyed on "token file present" (see
+// web.Server's googleSyncers) must evict that cache on this signal too, not
+// just react to the error — otherwise they keep reporting "connected" for a
+// token that will never work again.
+func IsInvalidGrant(err error) bool {
+	var retrieveErr *oauth2.RetrieveError
+	return errors.As(err, &retrieveErr) && retrieveErr.ErrorCode == "invalid_grant"
+}
+
 func (s *savingTokenSource) Token() (*oauth2.Token, error) {
 	tok, err := s.base.Token()
 	if err != nil {
+		// "connected" elsewhere (userGoogleSyncer) just means "a token file
+		// exists and parses" — harmless until Google actually confirms the
+		// refresh token itself is dead (invalid_grant), at which point
+		// leaving the file in place is actively wrong: every future check
+		// would keep reporting "connected" for a token that will never
+		// work again. Delete it so that check goes stale-but-safe instead
+		// of stale-but-wrong — best-effort, a delete failure shouldn't mask
+		// the real refresh error.
+		if IsInvalidGrant(err) {
+			_ = os.Remove(s.path)
+		}
 		return nil, fmt.Errorf("refreshing Google access token (you may need to re-run \"healthd auth google\"): %w", err)
 	}
 

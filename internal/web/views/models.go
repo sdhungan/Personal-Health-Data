@@ -116,13 +116,14 @@ type StageSegment struct {
 	TimeLabel string
 }
 
-// BodyMeasurementData is the editable weight/waist/neck form for one day.
-// Weight reflects body_measurement's raw/override split (a connected scale
-// writes raw, this form writes override); waist/neck have no upstream
-// source at all, so the form writes them directly.
+// BodyMeasurementData is the editable weight/height/waist/neck form for one
+// day. Weight and height both reflect body_measurement's raw/override split
+// (a connected scale writes raw, this form writes override); waist/neck have
+// no upstream source at all, so the form writes them directly.
 type BodyMeasurementData struct {
 	Day         string
 	WeightKg    *float64
+	HeightCm    *float64
 	WaistCm     *float64
 	NeckCm      *float64
 	HasPriorDay bool // whether "Carry forward" has anything to offer

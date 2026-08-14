@@ -321,7 +321,7 @@ var DefaultTileKinds = []string{
 	"steps", "calories", "active_energy", "distance", "active_minutes", "active_minutes_by_level",
 	"floors", "altitude", "sedentary", "activity_level", "activities",
 	"heart_rate", "resting_hr", "hrv", "hr_zones", "active_zone_minutes_by_zone",
-	"body", "blood_glucose", "core_body_temp",
+	"body", "body_fat", "blood_glucose", "core_body_temp",
 	"sleep",
 	"spo2", "respiratory_rate", "vo2max",
 	"nutrition_energy", "nutrition_expenditure", "nutrition_deficit", "nutrition_protein", "nutrition_carbs", "nutrition_fat", "food_log",

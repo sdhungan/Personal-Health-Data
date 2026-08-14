@@ -5,13 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/sdhungan/Personal-Health-Data/internal/web/views"
 )
 
 // buildBodyTile loads day's Body Measurements tile — the always-visible
-// weight/waist/neck entry form (see views.BodyMeasurementData).
+// weight/height/waist/neck entry form (see views.BodyMeasurementData).
 func buildBodyTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, day time.Time) (views.TileData, error) {
 	t.Kind = views.TileKindBody
 	t.Title = "Body Measurements"
@@ -27,17 +28,18 @@ func buildBodyTile(ctx context.Context, db *sql.DB, userID int64, t views.TileDa
 }
 
 // queryBodyMeasurementRow reads day's raw values straight from
-// body_measurement: weight prefers a manual override over a connected
-// scale's raw reading (body_measurement's existing raw/override split);
-// waist/neck have no upstream source at all, so they're read directly.
-func queryBodyMeasurementRow(ctx context.Context, db *sql.DB, userID int64, day string) (weightKg, waistCm, neckCm *float64, err error) {
-	var weightRaw, weightOverride, waist, neck sql.NullFloat64
+// body_measurement: weight and height both prefer a manual override over a
+// connected scale's raw reading (body_measurement's existing raw/override
+// split); waist/neck have no upstream source at all, so they're read
+// directly.
+func queryBodyMeasurementRow(ctx context.Context, db *sql.DB, userID int64, day string) (weightKg, heightCm, waistCm, neckCm *float64, err error) {
+	var weightRaw, weightOverride, heightRaw, heightOverride, waist, neck sql.NullFloat64
 	dbErr := db.QueryRowContext(ctx, `
-		SELECT weight_kg_raw, weight_kg_override, waist_cm, neck_cm
+		SELECT weight_kg_raw, weight_kg_override, height_cm_raw, height_cm_override, waist_cm, neck_cm
 		FROM body_measurement WHERE user_id = ? AND day = ?
-	`, userID, day).Scan(&weightRaw, &weightOverride, &waist, &neck)
+	`, userID, day).Scan(&weightRaw, &weightOverride, &heightRaw, &heightOverride, &waist, &neck)
 	if dbErr != nil && !errors.Is(dbErr, sql.ErrNoRows) {
-		return nil, nil, nil, fmt.Errorf("querying body_measurement for %s: %w", day, dbErr)
+		return nil, nil, nil, nil, fmt.Errorf("querying body_measurement for %s: %w", day, dbErr)
 	}
 	if weightOverride.Valid {
 		v := weightOverride.Float64
@@ -45,6 +47,13 @@ func queryBodyMeasurementRow(ctx context.Context, db *sql.DB, userID int64, day 
 	} else if weightRaw.Valid {
 		v := weightRaw.Float64
 		weightKg = &v
+	}
+	if heightOverride.Valid {
+		v := heightOverride.Float64
+		heightCm = &v
+	} else if heightRaw.Valid {
+		v := heightRaw.Float64
+		heightCm = &v
 	}
 	if waist.Valid {
 		v := waist.Float64
@@ -54,23 +63,25 @@ func queryBodyMeasurementRow(ctx context.Context, db *sql.DB, userID int64, day 
 		v := neck.Float64
 		neckCm = &v
 	}
-	return weightKg, waistCm, neckCm, nil
+	return weightKg, heightCm, waistCm, neckCm, nil
 }
 
-// fetchBodyMeasurement loads day's effective weight/waist/neck plus whether
-// any earlier day has at least one field "Carry forward" could pull from.
+// fetchBodyMeasurement loads day's effective weight/height/waist/neck plus
+// whether any earlier day has at least one field "Carry forward" could pull
+// from.
 func fetchBodyMeasurement(ctx context.Context, db *sql.DB, userID int64, day string) (*views.BodyMeasurementData, error) {
-	weightKg, waistCm, neckCm, err := queryBodyMeasurementRow(ctx, db, userID, day)
+	weightKg, heightCm, waistCm, neckCm, err := queryBodyMeasurementRow(ctx, db, userID, day)
 	if err != nil {
 		return nil, err
 	}
-	b := &views.BodyMeasurementData{Day: day, WeightKg: weightKg, WaistCm: waistCm, NeckCm: neckCm}
+	b := &views.BodyMeasurementData{Day: day, WeightKg: weightKg, HeightCm: heightCm, WaistCm: waistCm, NeckCm: neckCm}
 
-	if weightKg == nil || waistCm == nil || neckCm == nil {
+	if weightKg == nil || heightCm == nil || waistCm == nil || neckCm == nil {
 		var priorCount int
 		if err := db.QueryRowContext(ctx, `
 			SELECT count(*) FROM body_measurement
 			WHERE user_id = ? AND day < ? AND (weight_kg_override IS NOT NULL OR weight_kg_raw IS NOT NULL
+			                    OR height_cm_override IS NOT NULL OR height_cm_raw IS NOT NULL
 			                    OR waist_cm IS NOT NULL OR neck_cm IS NOT NULL)
 		`, userID, day).Scan(&priorCount); err != nil {
 			return nil, fmt.Errorf("checking prior body_measurement rows before %s: %w", day, err)
@@ -80,33 +91,78 @@ func fetchBodyMeasurement(ctx context.Context, db *sql.DB, userID int64, day str
 	return b, nil
 }
 
-// saveBodyMeasurement upserts day's manually-entered weight/waist/neck.
-// Weight is written to weight_kg_override, never weight_kg_raw — the sync
-// job owns raw, the UI owns override (see ARCHITECTURE.md §3).
-func saveBodyMeasurement(ctx context.Context, db *sql.DB, userID int64, day string, weightKg, waistCm, neckCm *float64) error {
+// navyBodyFatPercentMale estimates body fat % via the U.S. Navy circumference
+// method (male variant: waist/neck/height only). Returns false when the
+// inputs can't produce a valid estimate (waist <= neck makes the first log10
+// non-positive).
+//
+// ponytail: male-only. schema.sql already anticipates a female variant
+// (user_profile.sex + body_measurement.hip_cm, formula uses waist+hip-neck
+// instead) but there's no UI path to ever set sex='female' yet, so that
+// branch would be unreachable dead code today. Add it — plus a hip_cm form
+// field and a sex control somewhere in settings — together, the day a female
+// account actually needs this.
+// The formula's constants (495, 450, 1.0324, ...) were fit against
+// measurements in inches — every column behind waistCm/neckCm/heightCm here
+// is centimeters (schema.sql), so this converts before applying them.
+// Feeding cm straight into the inch-calibrated constants doesn't blow up
+// (log10 damps the unit mismatch to a roughly-constant offset rather than a
+// wild swing) which is exactly what makes it dangerous: the output still
+// looks like a plausible body-fat percentage, just a systematically wrong
+// one.
+func navyBodyFatPercentMale(waistCm, neckCm, heightCm float64) (float64, bool) {
+	const cmPerInch = 2.54
+	waistIn, neckIn, heightIn := waistCm/cmPerInch, neckCm/cmPerInch, heightCm/cmPerInch
+	diff := waistIn - neckIn
+	if diff <= 0 || heightIn <= 0 {
+		return 0, false
+	}
+	pct := 495/(1.0324-0.19077*math.Log10(diff)+0.15456*math.Log10(heightIn)) - 450
+	return pct, true
+}
+
+// saveBodyMeasurement upserts day's manually-entered weight/height/waist/neck
+// and recomputes body_fat_pct_calculated from whatever the resulting row has
+// (see navyBodyFatPercentMale) — NULL when waist/neck/height aren't all
+// present, same as every other field here: whatever the caller passes in is
+// exactly what ends up on the row, clearing a stale value is as valid a save
+// as setting one. Weight/height are written to their _override columns,
+// never _raw — the sync job owns raw, the UI owns override (see
+// ARCHITECTURE.md §3).
+func saveBodyMeasurement(ctx context.Context, db *sql.DB, userID int64, day string, weightKg, heightCm, waistCm, neckCm *float64) error {
+	var bodyFatPct *float64
+	if heightCm != nil && waistCm != nil && neckCm != nil {
+		if pct, ok := navyBodyFatPercentMale(*waistCm, *neckCm, *heightCm); ok {
+			bodyFatPct = &pct
+		}
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO body_measurement (user_id, day, weight_kg_override, waist_cm, neck_cm, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO body_measurement (user_id, day, weight_kg_override, height_cm_override, waist_cm, neck_cm, body_fat_pct_calculated, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id, day) DO UPDATE SET
-			weight_kg_override = excluded.weight_kg_override,
-			waist_cm           = excluded.waist_cm,
-			neck_cm            = excluded.neck_cm,
-			updated_at         = excluded.updated_at
-	`, userID, day, weightKg, waistCm, neckCm, now, now)
+			weight_kg_override      = excluded.weight_kg_override,
+			height_cm_override      = excluded.height_cm_override,
+			waist_cm                = excluded.waist_cm,
+			neck_cm                 = excluded.neck_cm,
+			body_fat_pct_calculated = excluded.body_fat_pct_calculated,
+			updated_at              = excluded.updated_at
+	`, userID, day, weightKg, heightCm, waistCm, neckCm, bodyFatPct, now, now)
 	if err != nil {
 		return fmt.Errorf("saving body measurement for %s: %w", day, err)
 	}
 	return nil
 }
 
-// carryForwardBodyMeasurement fills whichever of today's weight/waist/neck
-// are currently empty from the most recent earlier day that has a value for
-// that specific field — handled independently per field, since e.g. weight
-// might have last been logged two days ago while waist was logged five days
-// ago; there's no assumption that "yesterday" specifically has the data.
+// carryForwardBodyMeasurement fills whichever of today's
+// weight/height/waist/neck are currently empty from the most recent earlier
+// day that has a value for that specific field — handled independently per
+// field, since e.g. weight might have last been logged two days ago while
+// waist was logged five days ago; there's no assumption that "yesterday"
+// specifically has the data.
 func carryForwardBodyMeasurement(ctx context.Context, db *sql.DB, userID int64, day string) error {
-	weightKg, waistCm, neckCm, err := queryBodyMeasurementRow(ctx, db, userID, day)
+	weightKg, heightCm, waistCm, neckCm, err := queryBodyMeasurementRow(ctx, db, userID, day)
 	if err != nil {
 		return err
 	}
@@ -115,6 +171,13 @@ func carryForwardBodyMeasurement(ctx context.Context, db *sql.DB, userID int64, 
 			return err
 		} else {
 			weightKg = v
+		}
+	}
+	if heightCm == nil {
+		if v, err := latestPriorValue(ctx, db, userID, day, "COALESCE(height_cm_override, height_cm_raw)"); err != nil {
+			return err
+		} else {
+			heightCm = v
 		}
 	}
 	if waistCm == nil {
@@ -131,7 +194,7 @@ func carryForwardBodyMeasurement(ctx context.Context, db *sql.DB, userID int64, 
 			neckCm = v
 		}
 	}
-	return saveBodyMeasurement(ctx, db, userID, day, weightKg, waistCm, neckCm)
+	return saveBodyMeasurement(ctx, db, userID, day, weightKg, heightCm, waistCm, neckCm)
 }
 
 // latestPriorValue finds the most recent day before day with a non-null
@@ -155,4 +218,95 @@ func latestPriorValue(ctx context.Context, db *sql.DB, userID int64, day, column
 		return nil, fmt.Errorf("querying latest prior %s before %s: %w", column, day, err)
 	}
 	return &v, nil
+}
+
+// buildBodyFatTile loads day's body-fat % as a read-only stat tile — same
+// collapsed-sparkline/expanded-chart shape every other metric tile uses
+// (buildStatTile in data.go), but with its own small history query since
+// v_body_measurement isn't part of dashboardDailyRow (that composite stays
+// Google-Health/Cronometer only, see data.go's own doc comment). Value is
+// v_body_measurement.body_fat_pct: a smart scale's own direct reading
+// (body_fat_pct_raw) if one's ever synced, else our own Navy-method estimate
+// (body_fat_pct_calculated, written by saveBodyMeasurement).
+func buildBodyFatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
+	t.Kind = views.TileKindStat
+	t.Title = "Body Fat %"
+	t.Icon = "body"
+	t.Category = "body"
+	t.Unit = "%"
+
+	history, err := fetchBodyFatHistory(ctx, db, userID, day)
+	if err != nil {
+		return t, err
+	}
+
+	dayStr := day.Format(dateLayout)
+	if pct, ok := history[dayStr]; ok {
+		t.BigValue = fmt.Sprintf("%.1f", pct)
+	} else {
+		t.Empty = true
+		t.EmptyMsg = "Enter waist, neck & height above to calculate"
+	}
+
+	chart := buildBodyFatChart(day, history)
+	if chart != nil {
+		t.SparklineValues = chart.Values
+	}
+	if expanded && chart != nil {
+		t.Chart = chart
+		t.BigValue = fmt.Sprintf("%.1f", chart.Average)
+		t.ChartSubtext = fmt.Sprintf("7-day average: %s%%", t.BigValue)
+		t.Empty = false
+	}
+	return t, nil
+}
+
+// fetchBodyFatHistory returns day->body_fat_pct for the 7 days ending on day.
+func fetchBodyFatHistory(ctx context.Context, db *sql.DB, userID int64, day time.Time) (map[string]float64, error) {
+	start := day.AddDate(0, 0, -6).Format(dateLayout)
+	end := day.Format(dateLayout)
+	rows, err := db.QueryContext(ctx, `
+		SELECT day, body_fat_pct FROM v_body_measurement
+		WHERE user_id = ? AND day BETWEEN ? AND ? AND body_fat_pct IS NOT NULL
+	`, userID, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("querying v_body_measurement body_fat_pct for %s..%s: %w", start, end, err)
+	}
+	defer rows.Close()
+	out := map[string]float64{}
+	for rows.Next() {
+		var d string
+		var v float64
+		if err := rows.Scan(&d, &v); err != nil {
+			return nil, fmt.Errorf("scanning v_body_measurement row: %w", err)
+		}
+		out[d] = v
+	}
+	return out, rows.Err()
+}
+
+// buildBodyFatChart mirrors buildChart's (data.go) 7-day bar-chart shape,
+// just keyed by a plain day->value map instead of dashboardDailyRow + an
+// Extract func — not worth generalizing buildChart itself for one extra
+// caller.
+func buildBodyFatChart(day time.Time, history map[string]float64) *views.ChartData {
+	c := &views.ChartData{}
+	var total float64
+	any := false
+	for i := 6; i >= 0; i-- {
+		d := day.AddDate(0, 0, -i)
+		v, ok := history[d.Format(dateLayout)]
+		if ok {
+			total += v
+			any = true
+		}
+		c.Labels = append(c.Labels, d.Format("Mon"))
+		c.Values = append(c.Values, v)
+	}
+	if !any {
+		return nil
+	}
+	c.Total = total
+	c.Average = total / 7
+	return c
 }
