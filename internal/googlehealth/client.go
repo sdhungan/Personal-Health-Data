@@ -13,8 +13,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 // BaseURL is the Google Health API's REST base.
@@ -78,30 +80,73 @@ func (c *Client) DailyRollUp(ctx context.Context, dataType string, start, end Ci
 	return c.do(ctx, http.MethodPost, u, bytes.NewReader(body))
 }
 
+// maxRateLimitRetries/rateLimitBaseDelay bound how long do() waits out a
+// 429 (RESOURCE_EXHAUSTED) before giving up and returning the error to the
+// caller. Google Health's quota here is "requests per minute per user"
+// (300/min at the time of writing — see a real 429 body's
+// metadata.quota_limit_value), so a handful of exponentially-backed-off
+// retries comfortably clears within one such window, rather than aborting
+// the whole sync — and the day it's in the middle of — on the very first
+// burst. That burst is easy to hit now that a full-history catch-up bulk
+// sync (see internal/web/settings.go's runGoogleCatchUpSync) can walk many
+// days back-to-back, each one dozens of requests, on top of whatever the
+// scheduler or a manual "Sync" click is doing at the same time.
+// rateLimitBaseDelay is a var, not a const, purely so tests can shrink it.
+const maxRateLimitRetries = 5
+
+var rateLimitBaseDelay = 2 * time.Second
+
 func (c *Client) do(ctx context.Context, method, u string, body io.Reader) (json.RawMessage, error) {
-	req, err := http.NewRequestWithContext(ctx, method, u, body)
-	if err != nil {
-		return nil, fmt.Errorf("building request: %w", err)
-	}
+	// Buffered upfront so each retry attempt can replay the same body — an
+	// io.Reader can only be consumed once, and DailyRollUp's POST body
+	// needs to survive a retry same as any GET.
+	var bodyBytes []byte
 	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		var err error
+		bodyBytes, err = io.ReadAll(body)
+		if err != nil {
+			return nil, fmt.Errorf("reading request body: %w", err)
+		}
 	}
 
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("calling %s %s: %w", method, u, err)
-	}
-	defer resp.Body.Close()
+	for attempt := 0; ; attempt++ {
+		var reqBody io.Reader
+		if bodyBytes != nil {
+			reqBody = bytes.NewReader(bodyBytes)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, u, reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("building request: %w", err)
+		}
+		if reqBody != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading response body from %s %s: %w", method, u, err)
-	}
+		resp, err := c.HTTP.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("calling %s %s: %w", method, u, err)
+		}
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("reading response body from %s %s: %w", method, u, err)
+		}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: respBody}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
+				base := rateLimitBaseDelay * time.Duration(1<<attempt)
+				delay := base + time.Duration(rand.Int63n(int64(base)+1)) // jitter up to +100%, avoids a thundering herd on the shared per-minute quota
+				select {
+				case <-time.After(delay):
+					continue
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			return nil, &APIError{StatusCode: resp.StatusCode, Body: respBody}
+		}
+		return respBody, nil
 	}
-	return respBody, nil
 }
 
 // CivilDateTime mirrors the API's date/time message shape:
