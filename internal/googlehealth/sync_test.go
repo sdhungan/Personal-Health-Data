@@ -543,3 +543,52 @@ func TestUpsertActiveMinutesByLevelRollsBackOnPartialFailure(t *testing.T) {
 		t.Errorf("surviving row = (%q, %d), want the untouched pre-failure row (MODERATE, 20)", level, minutes)
 	}
 }
+
+// TestDedupedHourlyStepsMaxesAcrossSourcesInsteadOfSumming reproduces a real
+// account's steps tile showing roughly double the true count: a phone's own
+// step sensor and a watch both reporting steps for the same hour. Summing
+// both (the old behavior) double-counts; the fix takes the max reported by
+// any single source for that hour instead.
+func TestDedupedHourlyStepsMaxesAcrossSourcesInsteadOfSumming(t *testing.T) {
+	interval := ObservationTimeInterval{StartTime: "2026-07-30T10:00:00Z", EndTime: "2026-07-30T11:00:00Z"}
+	points := []SourcedValue[Steps]{
+		{Source: "phone", Value: Steps{Interval: interval, Count: 500}},
+		{Source: "watch", Value: Steps{Interval: interval, Count: 700}},
+	}
+
+	hourly := dedupedHourlySteps(points)
+	hour := mustParseUTC(t, interval.StartTime).In(time.Local).Hour()
+	if got, want := hourly[hour], int64(700); got != want {
+		t.Errorf("dedupedHourlySteps with two sources in the same hour = %d, want %d (max, not the summed 1200)", got, want)
+	}
+}
+
+// TestDedupedHourlyStepsSumsSameSourceAcrossChunks checks that multiple
+// same-source intervals within an hour (a device reporting in smaller
+// chunks) still add up, rather than the per-source dedup accidentally
+// collapsing them too.
+func TestDedupedHourlyStepsSumsSameSourceAcrossChunks(t *testing.T) {
+	points := []SourcedValue[Steps]{
+		{Source: "watch", Value: Steps{
+			Interval: ObservationTimeInterval{StartTime: "2026-07-30T10:00:00Z", EndTime: "2026-07-30T10:30:00Z"}, Count: 300,
+		}},
+		{Source: "watch", Value: Steps{
+			Interval: ObservationTimeInterval{StartTime: "2026-07-30T10:30:00Z", EndTime: "2026-07-30T11:00:00Z"}, Count: 400,
+		}},
+	}
+
+	hourly := dedupedHourlySteps(points)
+	hour := mustParseUTC(t, "2026-07-30T10:00:00Z").In(time.Local).Hour()
+	if got, want := hourly[hour], int64(700); got != want {
+		t.Errorf("dedupedHourlySteps with same-source chunks = %d, want %d (summed within one source)", got, want)
+	}
+}
+
+func mustParseUTC(t *testing.T, s string) time.Time {
+	t.Helper()
+	tm, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tm
+}

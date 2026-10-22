@@ -497,10 +497,44 @@ func (s *DBSyncer) syncCoreBodyTemperature(ctx context.Context, day time.Time) (
 	return true, &a, &lo, &hi, nil
 }
 
+// dedupedHourlySteps buckets step points by local hour, deduplicating
+// across data sources: points from the same source within an hour are
+// summed first (sequential chunks from one device), then the hour's value
+// is the max across sources rather than their sum. Summing whole-source
+// totals double-counts whenever more than one device reports steps for the
+// same period — e.g. a phone's own step sensor running alongside a watch,
+// which is exactly what produced a real account's steps tile showing
+// roughly double the true count. With only one source reporting (the
+// common case), this reduces to the same per-hour sum as before.
+func dedupedHourlySteps(points []SourcedValue[Steps]) map[int]int64 {
+	bySourceHour := map[string]map[int]int64{}
+	for _, p := range points {
+		start, err := p.Value.Interval.Start()
+		if err != nil {
+			continue
+		}
+		hour := start.In(time.Local).Hour()
+		if bySourceHour[p.Source] == nil {
+			bySourceHour[p.Source] = map[int]int64{}
+		}
+		bySourceHour[p.Source][hour] += int64(p.Value.Count)
+	}
+
+	hourly := make(map[int]int64)
+	for _, hours := range bySourceHour {
+		for hour, count := range hours {
+			if count > hourly[hour] {
+				hourly[hour] = count
+			}
+		}
+	}
+	return hourly
+}
+
 // syncStepsHourly buckets the day's step intervals by local hour into
 // watch_steps_hourly.
 func (s *DBSyncer) syncStepsHourly(ctx context.Context, day time.Time) (bool, error) {
-	points, err := fetchIntervalPoints[Steps](ctx, s.Client, "steps", day)
+	points, err := fetchIntervalPointsWithSource[Steps](ctx, s.Client, "steps", day)
 	if err != nil {
 		return false, err
 	}
@@ -508,14 +542,7 @@ func (s *DBSyncer) syncStepsHourly(ctx context.Context, day time.Time) (bool, er
 		return false, nil
 	}
 
-	hourly := make(map[int]int64)
-	for _, p := range points {
-		start, err := p.Interval.Start()
-		if err != nil {
-			continue
-		}
-		hourly[start.In(time.Local).Hour()] += int64(p.Count)
-	}
+	hourly := dedupedHourlySteps(points)
 
 	dayStr := dayKey(day)
 	rows := make([]healthdata.HourlySteps, 0, len(hourly))

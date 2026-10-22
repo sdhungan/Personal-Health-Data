@@ -271,12 +271,12 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 
 	// ---- Interval types, filtered server-side to this day ----
 
-	if steps, err := fetchIntervalPoints[Steps](ctx, s.Client, "steps", day); err != nil {
+	if steps, err := fetchIntervalPointsWithSource[Steps](ctx, s.Client, "steps", day); err != nil {
 		return out, false, err
 	} else if len(steps) > 0 {
 		var total int64
-		for _, p := range steps {
-			total += int64(p.Count)
+		for _, count := range dedupedHourlySteps(steps) {
+			total += count
 		}
 		out.StepsTotal = &total
 		hasData = true
@@ -423,6 +423,24 @@ func fetchIntervalPoints[T any](ctx context.Context, client *Client, dataTypeNam
 		return nil, fmt.Errorf("listing %s: %w", dataTypeName, err)
 	}
 	points, err := ExtractValues[T](raw, ValueKey(dataTypeName))
+	if err != nil {
+		return nil, fmt.Errorf("decoding %s: %w", dataTypeName, err)
+	}
+	return points, nil
+}
+
+// fetchIntervalPointsWithSource is fetchIntervalPoints, but keeps each
+// point's data source (see ExtractValuesWithSource) — used by metrics where
+// more than one device reporting the same period must be deduplicated
+// rather than summed together (currently just steps; see
+// dedupedHourlySteps).
+func fetchIntervalPointsWithSource[T any](ctx context.Context, client *Client, dataTypeName string, day time.Time) ([]SourcedValue[T], error) {
+	filter := intervalDayFilter(dataTypeName, day)
+	raw, err := client.ListDataPoints(ctx, dataTypeName, filter, 10000)
+	if err != nil {
+		return nil, fmt.Errorf("listing %s: %w", dataTypeName, err)
+	}
+	points, err := ExtractValuesWithSource[T](raw, ValueKey(dataTypeName))
 	if err != nil {
 		return nil, fmt.Errorf("decoding %s: %w", dataTypeName, err)
 	}
