@@ -125,6 +125,9 @@ func renderBarChartSVG(c ChartData, id string) string {
 // or per-activity; resting HR/HRV over 7 days) with the same hover
 // crosshair/tooltip and gridline treatment as renderBarChartSVG. unit
 // suffixes the hover tooltip value.
+// maxDotSamples is the most samples a line chart draws individual dots for.
+const maxDotSamples = 31
+
 func renderLineChartSVG(samples []HRSample, id, unit string) string {
 	n := len(samples)
 	if n == 0 {
@@ -176,6 +179,15 @@ func renderLineChartSVG(samples []HRSample, id, unit string) string {
 			left, right-left, hoverAttrs(id, x(i), y(s.Bpm), s.TimeLabel, formatAxisNumber(s.Bpm)+" "+unit))
 	}
 	b.WriteString(`</svg>`)
+
+	// A visible dot per sample when there are few enough to tell apart
+	// (7-day resting HR/HRV), not on dense intraday heart rate. HTML rather
+	// than SVG circles so they stay round on the stretched plot.
+	if n <= maxDotSamples {
+		for i, s := range samples {
+			fmt.Fprintf(&b, `<span class="chart-dot" style="left:%.2f%%;top:%.2f%%"></span>`, x(i), y(s.Bpm))
+		}
+	}
 
 	chartYLabelSpans(&b, minV, maxV, y)
 	// Up to 5 evenly spaced time labels rather than one per sample (which

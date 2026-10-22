@@ -533,6 +533,16 @@ body.tile-resizing { user-select: none; }
   pointer-events: none;
 }
 .chart-hit-target { fill: transparent; cursor: crosshair; }
+.chart-dot {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--tile-accent, var(--accent));
+  border: 2px solid var(--tile-bg);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
 
 /* ---- Grafana-style hover crosshair + tooltip (pure Datastar, no JS lib) ---- */
 .chart-crosshair-v, .chart-crosshair-h {
