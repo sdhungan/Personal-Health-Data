@@ -62,5 +62,16 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
+
+	// A zero or negative value here isn't just "sync less often" — it's
+	// fed straight into time.NewTicker (internal/cli/service.go), which
+	// panics outright on a non-positive duration and takes the whole
+	// merged process down with it, dashboard included, over one bad
+	// config.yaml edit. Falling back to the default is cheap insurance
+	// against that for the one bit of this config a hand-edit is likely
+	// to get wrong (e.g. trying to "disable" sync by zeroing it).
+	if cfg.SyncIntervalMinutes <= 0 {
+		cfg.SyncIntervalMinutes = Default().SyncIntervalMinutes
+	}
 	return cfg, nil
 }
