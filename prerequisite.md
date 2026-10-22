@@ -189,7 +189,45 @@ for a nested (non-root) `data-signals`, so don't assume they do.
   API everything else in `internal/googlehealth` uses, undocumented in
   detail on the REST reference index page, and NOT implemented — flagged as
   a possible future enhancement, not attempted (would need its own schema
-  for route points and TCX/XML parsing).
+  for route points and TCX/XML parsing). **Update 2026-10-18**: a
+  `googlehealth.location.readonly` scope now exists on
+  `developers.google.com/health/scopes` ("GPS location during exercise")
+  while `developers.google.com/health/data-types` still lists no location
+  data type — consistent with that scope gating `exportExerciseTcx` rather
+  than a listable type, so the note above stands; it just means the route
+  enhancement would need a sixth scope added to `googleauth.Scopes`.
+- **The Google OAuth consent screen's publishing status is the thing that
+  breaks Google Health auth, not the scopes** (verified 2026-10-18 against
+  the live deployed service at `G:\HealthService`). In **Testing** status,
+  `developers.google.com/health/setup` states refresh tokens "are
+  time-based and expire after 7 days" — so an unattended service dies
+  roughly weekly with `invalid_grant`, `savingTokenSource` deletes the
+  token file (by design, see its comment), the dashboard reverts to "not
+  connected", and someone has to re-run the consent flow. No code change
+  fixes this: flip the OAuth client to **Production** publishing status in
+  Google Cloud Console. Verification/CASA is *not* required to do that —
+  the same page caps an unverified client at 100 users "for both testing
+  and production", which is irrelevant for a personal single-account
+  instance. Before suspecting the scopes or the client JSON, check
+  publishing status first.
+- **healthd's five requested scopes are current and correct** as of
+  2026-10-18 (`activity_and_fitness`/`sleep`/
+  `health_metrics_and_measurements`/`ecg`/`irn`, all `.readonly`).
+  Google's 2026-05-26 change renamed the *bare* read/write scopes to
+  `.writeonly` and added `.ecg.readonly`/`.irn.readonly`; `googleauth.Scopes`
+  already used the `.readonly` forms, so that change was a no-op here.
+  2026-08-17 added only `.writeonly` scopes (symptoms/mindfulness/
+  reproductive health) — nothing readable. 2026-10-01 added a `v4beta`
+  channel and one new type, `skin-temperature-sensors` (v4beta only);
+  `client.go` pins `v4`, so that's opt-in, not a break.
+- **`healthd sync --dump-today` cannot be run against the deployed root
+  while the service is up** — `runDumpToday` calls `db.Open`, which is the
+  concurrent-working-file hazard that already destroyed data once (see the
+  2026-08-05 incident above). To probe the live API against real
+  credentials, write a throwaway program that loads the token via
+  `googleauth.LoadToken` + a plain (non-persisting) `cfg.TokenSource` and
+  calls `googlehealth.DumpToday` into a scratch dir — no DB, and no risk of
+  rewriting `google_oauth.json.enc` under the running service.
 - `watch_heart_rate_intraday` is a **rolling cache**, not permanent history —
   its own schema comment says so, and it's true in practice (confirmed only
   ~3 days of samples present in the live dev DB). Any UI that reads it must
