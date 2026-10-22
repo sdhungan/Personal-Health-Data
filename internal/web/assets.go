@@ -7,5 +7,5 @@ import "embed"
 // runtime dependency on a CDN or the filesystem next to the binary,
 // consistent with ARCHITECTURE.md's single-binary, fully-local intent.
 //
-//go:embed static/datastar.js static/style.css
+//go:embed static/datastar.js static/style.css static/tile-resize.js
 var staticFS embed.FS

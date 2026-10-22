@@ -138,7 +138,7 @@ var userDataTables = []string{
 	"watch_heart_rate_zone_definition", "watch_heart_rate_zone_minutes", "watch_calories_by_zone",
 	"body_measurement",
 	"cronometer_daily_nutrition", "cronometer_serving", "cronometer_exercise", "cronometer_biometric", "cronometer_note",
-	"daily_journal", "daily_tag",
+	"daily_journal", "daily_tag", "dashboard_tile_layout",
 }
 
 // DeleteUser permanently deletes userID's account: every row of their data

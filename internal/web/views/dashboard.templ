@@ -115,10 +115,10 @@ templ EmptySummaryTile(titles []string) {
 // them in.
 func splitNutritionTiles(tiles []TileData) (kcal, macro []TileData, foodLog *TileData) {
 	for _, t := range tiles {
-		switch t.Metric {
-		case "nutrition_energy", "nutrition_expenditure", "nutrition_deficit":
+		switch nutritionBucket(t.Metric) {
+		case "kcal":
 			kcal = append(kcal, t)
-		case "nutrition_protein", "nutrition_carbs", "nutrition_fat":
+		case "macro":
 			macro = append(macro, t)
 		case "food_log":
 			ft := t
@@ -128,27 +128,86 @@ func splitNutritionTiles(tiles []TileData) (kcal, macro []TileData, foodLog *Til
 	return kcal, macro, foodLog
 }
 
+func nutritionBucket(metric string) string {
+	switch metric {
+	case "nutrition_energy", "nutrition_expenditure", "nutrition_deficit":
+		return "kcal"
+	case "nutrition_protein", "nutrition_carbs", "nutrition_fat":
+		return "macro"
+	case "food_log":
+		return "food_log"
+	}
+	return ""
+}
+
+// tileGroup is the set of tiles t can be dragged among: its section, or
+// for Nutrition, its own row (see NutritionSection) — a drop target outside
+// the dragged tile's own grid container would make no visual sense.
+func tileGroup(t TileData) string {
+	if t.Category == "nutrition" {
+		return "nutrition-" + nutritionBucket(t.Metric)
+	}
+	return t.Category
+}
+
+func fullWidthExpanded(t TileData) bool {
+	return t.Expanded && t.Kind != TileKindStat && t.Kind != TileKindSleep
+}
+
+// tileResizable: only an expanded tile can be resized (see
+// static/tile-resize.js); the food log sits outside any grid (see
+// NutritionSection), so a column span would do nothing for it.
+func tileResizable(t TileData) bool {
+	return t.Expanded && t.Metric != "food_log"
+}
+
+func tileSpanClass(t TileData) string {
+	if t.Expanded && t.Width > 0 {
+		return fmt.Sprintf("tile-span-%d", t.Width)
+	}
+	return ""
+}
+
 templ Tile(t TileData, day string) {
-	{{ fullWidthExpanded := t.Expanded && t.Kind != TileKindStat && t.Kind != TileKindSleep }}
-	<div id={ t.ID } data-category={ t.Category } class={ "tile", templ.KV("tile-expanded", fullWidthExpanded), tileSizeClass(t) }>
-		<div class="tile-header">
+	<div
+		id={ t.ID }
+		data-category={ t.Category }
+		class={ "tile", templ.KV("tile-expanded", fullWidthExpanded(t)), tileSizeClass(t), tileSpanClass(t) }
+		data-on:dragover={ tileDragOverExpr(tileGroup(t)) }
+		data-on:drop={ tileDropExpr(t.Metric, tileGroup(t)) }
+		if t.Expanded && t.Height > 0 {
+			style={ fmt.Sprintf("height: %dpx", t.Height) }
+		}
+		if tileResizable(t) {
+			data-resize-url={ tileResizeURL(t.Metric) }
+		}
+	>
+		<div
+			class="tile-header"
+			draggable="true"
+			title="Drag to reorder"
+			data-on:dragstart={ tileDragStartExpr(t.Metric, tileGroup(t)) }
+			data-on:dragend="$_dragGroup = ''"
+		>
 			<div class="tile-header-left">
 				<span class="tile-icon-badge">
 					@iconFor(t.Icon)
 				</span>
 				<span class="tile-title">{ t.Title }</span>
 			</div>
-			if t.Kind != TileKindBody {
-				if t.Expanded {
-					<button class="tile-collapse-btn" data-on:click={ getExpr(tileURL(t.Metric, day, false)) } title="Collapse">
-						@iconCollapse()
-					</button>
-				} else {
-					<button class="tile-expand-btn" data-on:click={ getExpr(tileURL(t.Metric, day, true)) } title="Expand">
-						@iconExpand()
-					</button>
+			<div class="tile-header-actions">
+				if t.Kind != TileKindBody {
+					if t.Expanded {
+						<button class="tile-collapse-btn" data-on:click={ getExpr(tileURL(t.Metric, day, false)) } title="Collapse">
+							@iconCollapse()
+						</button>
+					} else {
+						<button class="tile-expand-btn" data-on:click={ getExpr(tileURL(t.Metric, day, true)) } title="Expand">
+							@iconExpand()
+						</button>
+					}
 				}
-			}
+			</div>
 		</div>
 		<div class="tile-body">
 			switch t.Kind {
@@ -164,6 +223,11 @@ templ Tile(t TileData, day string) {
 					@foodLogTileBody(t)
 			}
 		</div>
+		if tileResizable(t) {
+			<div class="tile-resize-handle tile-resize-x" data-resize="x" title="Drag to resize width"></div>
+			<div class="tile-resize-handle tile-resize-y" data-resize="y" title="Drag to resize height"></div>
+			<div class="tile-resize-handle tile-resize-xy" data-resize="xy" title="Drag to resize"></div>
+		}
 	</div>
 }
 

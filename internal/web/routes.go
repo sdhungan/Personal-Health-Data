@@ -45,6 +45,8 @@ func (s *Server) registerRoutes() {
 	api := s.echo.Group(views.APIPrefix, auth)
 	api.GET("/view", s.handleView)
 	api.GET("/tile", s.handleTile)
+	api.POST("/tile/move", s.handleTileMove)
+	api.POST("/tile/resize", s.handleTileResize)
 	api.GET("/activity", s.handleActivity)
 	api.GET("/food-serving", s.handleFoodServing)
 	api.POST("/sync", s.handleForceSync)

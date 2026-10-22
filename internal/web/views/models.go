@@ -76,6 +76,8 @@ type TileData struct {
 	Icon     string // key into the iconFor() templ component
 
 	Expanded bool
+	Width    int // saved expanded width in twelfths of the row (2-12, 12 = full row); 0 = the tile's built-in default
+	Height   int // saved expanded height in px (snapped to 20); 0 = the tile's built-in default
 
 	// TileKindStat / TileKindSleep
 	BigValue        string

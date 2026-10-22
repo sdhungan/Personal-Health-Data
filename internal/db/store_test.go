@@ -238,8 +238,8 @@ func TestMigrationAddsMCPTokenTable(t *testing.T) {
 	}
 	defer store.Close()
 
-	if _, err := store.DB().Exec(`DROP TABLE mcp_token`); err != nil {
-		t.Fatalf("dropping mcp_token to simulate a pre-migration database: %v", err)
+	if _, err := store.DB().Exec(`DROP TABLE mcp_token; DROP TABLE dashboard_tile_layout`); err != nil {
+		t.Fatalf("dropping migrated tables to simulate a pre-migration database: %v", err)
 	}
 	if _, err := store.DB().Exec(`PRAGMA user_version = 0`); err != nil {
 		t.Fatalf("resetting schema version: %v", err)

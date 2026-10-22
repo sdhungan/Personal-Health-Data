@@ -62,7 +62,7 @@ func dayLabel(day time.Time) string {
 	}
 }
 
-func buildDashboardData(ctx context.Context, db *sql.DB, userID int64, day time.Time, view string, tileKinds []string, cronometerConnected bool) (views.DashboardData, error) {
+func buildDashboardData(ctx context.Context, db *sql.DB, userID int64, day time.Time, view string, cronometerConnected bool) (views.DashboardData, error) {
 	dayStr := day.Format(dateLayout)
 	data := views.DashboardData{
 		Day:                 dayStr,
@@ -83,9 +83,13 @@ func buildDashboardData(ctx context.Context, db *sql.DB, userID int64, day time.
 	if err != nil {
 		return data, err
 	}
+	tileKinds, sizes, err := fetchTileLayout(ctx, db, userID)
+	if err != nil {
+		return data, err
+	}
 
 	for _, kind := range tileKinds {
-		t := views.TileData{ID: "tile-" + kind, Metric: kind, Expanded: defaultExpandedKind(kind)}
+		t := views.TileData{ID: "tile-" + kind, Metric: kind, Expanded: defaultExpandedKind(kind), Width: sizes[kind].Width, Height: sizes[kind].Height}
 		switch {
 		case kind == "activities":
 			t, err = buildActivitiesTile(ctx, db, userID, t, day, t.Expanded)
@@ -156,7 +160,7 @@ func (s *Server) handleIndex(c echo.Context) error {
 	day := parseDay(c)
 	userID := webauth.CurrentUserID(c)
 
-	data, err := buildDashboardData(ctx, s.DB, userID, day, "data", DefaultTileKinds, s.cronometerConnected(userID))
+	data, err := buildDashboardData(ctx, s.DB, userID, day, "data", s.cronometerConnected(userID))
 	if err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
@@ -224,7 +228,7 @@ func (s *Server) handleView(c echo.Context) error {
 		}
 	}
 
-	data, err := buildDashboardData(ctx, s.DB, userID, day, "data", DefaultTileKinds, s.cronometerConnected(userID))
+	data, err := buildDashboardData(ctx, s.DB, userID, day, "data", s.cronometerConnected(userID))
 	if err != nil {
 		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
 	}
@@ -234,16 +238,49 @@ func (s *Server) handleView(c echo.Context) error {
 // handleTile answers a tile's expand/collapse button by patching that one
 // tile via SSE, identified by its own id — nothing else on the page moves.
 func (s *Server) handleTile(c echo.Context) error {
-	ctx := c.Request().Context()
 	day := parseDay(c)
 	kind := c.QueryParam("kind")
-	expanded := c.QueryParam("expanded") == "true"
-	userID := webauth.CurrentUserID(c)
-
+	if !slices.Contains(DefaultTileKinds, kind) {
+		return c.String(http.StatusNotFound, "unknown tile kind")
+	}
 	sse := datastar.NewSSE(c.Response(), c.Request())
+	return s.patchOneTile(sse, c.Request().Context(), webauth.CurrentUserID(c), kind, day, c.QueryParam("expanded") == "true")
+}
 
-	t := views.TileData{ID: "tile-" + kind, Metric: kind, Expanded: expanded}
-	var err error
+// handleTileMove persists a drag-and-drop reorder. The browser has already
+// moved the tile's DOM node itself (see tileDropExpr), so there's nothing
+// to patch back — re-rendering here would also collapse any tile the user
+// had expanded, since expanded state lives only in the page.
+func (s *Server) handleTileMove(c echo.Context) error {
+	if err := moveTile(c.Request().Context(), s.DB, webauth.CurrentUserID(c), c.QueryParam("kind"), c.QueryParam("target")); err != nil {
+		return c.String(http.StatusBadRequest, err.Error())
+	}
+	datastar.NewSSE(c.Response(), c.Request())
+	return nil
+}
+
+// handleTileResize persists an expanded tile's new size, sent by
+// static/tile-resize.js once a resize drag ends. The browser has already
+// applied the size live during the drag, and charts stretch to fit by CSS
+// alone, so nothing needs re-rendering.
+func (s *Server) handleTileResize(c echo.Context) error {
+	width, _ := strconv.Atoi(c.QueryParam("width"))
+	height, _ := strconv.Atoi(c.QueryParam("height"))
+	size := tileSize{Width: width, Height: height}
+	if err := saveTileSize(c.Request().Context(), s.DB, webauth.CurrentUserID(c), c.QueryParam("kind"), size); err != nil {
+		return c.String(http.StatusBadRequest, err.Error())
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+// patchOneTile builds kind's tile for day (with its saved size) and patches
+// it in place by id.
+func (s *Server) patchOneTile(sse *datastar.ServerSentEventGenerator, ctx context.Context, userID int64, kind string, day time.Time, expanded bool) error {
+	_, sizes, err := fetchTileLayout(ctx, s.DB, userID)
+	if err != nil {
+		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
+	}
+	t := views.TileData{ID: "tile-" + kind, Metric: kind, Expanded: expanded, Width: sizes[kind].Width, Height: sizes[kind].Height}
 	switch {
 	case kind == "activities":
 		t, err = buildActivitiesTile(ctx, s.DB, userID, t, day, expanded)
@@ -266,9 +303,6 @@ func (s *Server) handleTile(c echo.Context) error {
 	case kind == "food_log":
 		t, err = buildFoodLogTile(ctx, s.DB, userID, t, day, expanded)
 	default:
-		if _, ok := metricDefs[kind]; !ok {
-			return c.String(http.StatusNotFound, "unknown tile kind")
-		}
 		today, ferr := fetchDailySummaryRow(ctx, s.DB, userID, day.Format(dateLayout))
 		if ferr != nil {
 			err = ferr
@@ -526,7 +560,7 @@ func (s *Server) patchCurrentView(sse *datastar.ServerSentEventGenerator, ctx co
 		return sse.PatchElementTempl(views.JournalViewBody(data, j))
 	}
 
-	data, err := buildDashboardData(ctx, s.DB, userID, day, "data", DefaultTileKinds, s.cronometerConnected(userID))
+	data, err := buildDashboardData(ctx, s.DB, userID, day, "data", s.cronometerConnected(userID))
 	if err != nil {
 		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
 	}

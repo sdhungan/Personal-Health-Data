@@ -693,6 +693,20 @@ CREATE TABLE daily_tag (
 
 CREATE INDEX idx_daily_tag_tag ON daily_tag (tag);
 
+-- Per-account dashboard layout, authored via the dashboard's drag-to-reorder
+-- and resize controls. position orders tiles within their section (the
+-- section itself is fixed by the tile's kind); width is the expanded tile's
+-- width in twelfths of its row (2-12, 12 = full row) and height its pixel
+-- height (snapped to 20px), both NULL = the tile's built-in default.
+CREATE TABLE dashboard_tile_layout (
+    user_id  INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    kind     TEXT NOT NULL,
+    position INTEGER,
+    width    INTEGER CHECK (width BETWEEN 1 AND 12),
+    height   INTEGER CHECK (height BETWEEN 120 AND 1200),
+    PRIMARY KEY (user_id, kind)
+);
+
 -- =============================================================================
 -- Cross-source dashboard convenience view
 -- =============================================================================

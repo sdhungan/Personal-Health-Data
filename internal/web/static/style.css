@@ -311,11 +311,16 @@ body {
   margin: 0 0 12px 2px;
 }
 
+/* Fixed 12-column grid: every tile width is a whole number of twelfths of
+   the row, so halves, thirds, quarters and sixths all fit a row exactly
+   (see the span rules below and static/tile-resize.js). */
 .dashboard-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 14px;
-  grid-auto-flow: dense;
+  /* No grid-auto-flow: dense — tiles stay in the user's saved order (see
+     tilelayout.go) rather than smaller ones jumping into earlier gaps. */
+  container-type: inline-size;
 }
 
 .tile {
@@ -362,17 +367,51 @@ body {
 .tile[data-category="respiratory"]  { --tile-accent: var(--cat-respiratory); }
 .tile[data-category="nutrition"]    { --tile-accent: var(--cat-nutrition); }
 
-.tile-wide { grid-column: span 2; }
-.tile-expanded { grid-column: 1 / -1; }
+/* Default widths in twelfths: a tile is a quarter row, the Nutrition
+   rows' 3 tiles a third each, a wide tile half, an expanded one full. */
+.dashboard-grid > .tile, .nutrition-row > .tile { grid-column: span 3; }
+.nutrition-row > .tile { grid-column: span 4; }
+.dashboard-grid > .tile-empty-summary, .nutrition-row > .tile-empty-summary { grid-column: 1 / -1; }
+.tile.tile-wide { grid-column: span 6; }
+.tile.tile-expanded { grid-column: 1 / -1; }
+
+/* User-chosen expanded width (TileData.Width), in twelfths of the row. */
+.tile.tile-span-1 { grid-column: span 1; }
+.tile.tile-span-2 { grid-column: span 2; }
+.tile.tile-span-3 { grid-column: span 3; }
+.tile.tile-span-4 { grid-column: span 4; }
+.tile.tile-span-5 { grid-column: span 5; }
+.tile.tile-span-6 { grid-column: span 6; }
+.tile.tile-span-7 { grid-column: span 7; }
+.tile.tile-span-8 { grid-column: span 8; }
+.tile.tile-span-9 { grid-column: span 9; }
+.tile.tile-span-10 { grid-column: span 10; }
+.tile.tile-span-11 { grid-column: span 11; }
+.tile.tile-span-12 { grid-column: span 12; }
+
+/* Narrow containers: twelfths get too thin to read, so anything up to
+   half a row becomes exactly half, anything wider a full row — and on a
+   phone-width container every tile is a full row. */
+@container (max-width: 900px) {
+  .tile.tile.tile { grid-column: span 6; }
+  .tile.tile-expanded:not([class*="tile-span-"]),
+  .tile.tile-span-7.tile, .tile.tile-span-8.tile, .tile.tile-span-9.tile,
+  .tile.tile-span-10.tile, .tile.tile-span-11.tile, .tile.tile-span-12.tile,
+  .tile.tile-empty-summary.tile { grid-column: 1 / -1; }
+}
+@container (max-width: 520px) {
+  .tile.tile.tile.tile { grid-column: 1 / -1; }
+}
 
 /* Nutrition section: two explicit rows (kcal metrics, then macros) instead
    of leaving them to whatever the general dashboard-grid's auto-fill
    happens to wrap into at the current viewport width. */
 .nutrition-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 14px;
   margin-bottom: 14px;
+  container-type: inline-size;
 }
 
 .tile-header {
@@ -381,7 +420,9 @@ body {
   justify-content: space-between;
   margin-bottom: 10px;
 }
+.tile-header[draggable="true"] { cursor: grab; }
 .tile-header-left { display: flex; align-items: center; gap: 8px; }
+.tile-header-actions { display: flex; align-items: center; gap: 2px; }
 .tile-icon-badge {
   display: flex;
   align-items: center;
@@ -404,6 +445,31 @@ body {
 }
 .tile-expand-btn:hover, .tile-collapse-btn:hover { color: var(--text); background: var(--tile-bg-hover); }
 
+/* Resize handles on expanded tiles (see static/tile-resize.js): invisible
+   strips on the right and bottom edges plus a small visible corner grip. */
+.tile { position: relative; }
+.tile-resize-handle { position: absolute; z-index: 2; touch-action: none; }
+.tile-resize-x { top: 0; right: -4px; width: 8px; height: 100%; cursor: ew-resize; }
+.tile-resize-y { left: 0; bottom: -4px; width: 100%; height: 8px; cursor: ns-resize; }
+.tile-resize-xy { right: -4px; bottom: -4px; width: 18px; height: 18px; cursor: nwse-resize; }
+.tile-resize-xy::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--text-dim);
+  border-bottom: 2px solid var(--text-dim);
+  opacity: 0.5;
+}
+.tile:hover .tile-resize-xy::after { opacity: 1; }
+body.tile-resizing { user-select: none; }
+/* A user-set height can be shorter than a list/form tile's content; charts
+   rescale instead, and must not clip their hover tooltips. */
+.tile[style*="height"] .tile-body { min-height: 0; }
+.tile[style*="height"] .tile-body:not(:has(.chart-wrap)) { overflow: auto; }
+
 .tile-body { flex: 1; display: flex; flex-direction: column; justify-content: center; }
 
 .tile-value-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -423,18 +489,41 @@ body {
 .tile-stat-header { margin-bottom: 4px; }
 .tile-stat-sub { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 6px; }
 
-/* max-width keeps a small trend/hourly chart from ballooning in height when
-   its tile happens to sit in a wide row — width:100% inside that cap still
-   shrinks it responsively on narrower tiles/screens. */
-.chart-wrap { position: relative; max-width: 560px; }
+/* Bar/line charts fill their tile (see chart.go's layout comment): the
+   wrap grows into whatever height the tile body has (min 150px), its
+   padding is the fixed-size gutter for the HTML axis labels, and the SVG is
+   stretched over .chart-plot with non-scaling strokes, so resizing a tile
+   rescales the plot cleanly without stretching text or line widths. */
+.chart-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+  min-height: 150px;
+  padding: 8px 8px 20px 40px;
+}
+.chart-plot {
+  position: relative;
+  flex: 1;
+  border-left: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
 .chart-svg { width: 100%; height: auto; display: block; }
+.chart-plot > .chart-svg { position: absolute; inset: 0; height: 100%; overflow: visible; }
+.chart-svg line, .chart-svg polyline { vector-effect: non-scaling-stroke; }
+.chart-y-label, .chart-x-label, .chart-goal-label {
+  position: absolute;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.chart-y-label { right: calc(100% + 6px); transform: translateY(-50%); }
+.chart-x-label { top: calc(100% + 3px); transform: translateX(-50%); }
+.chart-goal-label { right: 4px; transform: translateY(-120%); }
 .chart-axis { stroke: var(--border); stroke-width: 1; }
 .chart-gridline { stroke: var(--text); stroke-width: 1; opacity: 0.08; }
-.chart-axis-label { fill: var(--text-dim); font-size: 9px; }
 .chart-bar { fill: var(--tile-accent, var(--accent)); cursor: crosshair; }
-.chart-bar-label { fill: var(--text-dim); font-size: 9px; text-anchor: middle; }
 .chart-goal-line { stroke: var(--goal-line); stroke-dasharray: 4 3; }
-.chart-goal-label { fill: var(--text-dim); font-size: 9px; }
 .chart-line {
   fill: none;
   stroke: var(--tile-accent, var(--accent));
@@ -481,7 +570,8 @@ body {
 .detail-stat-value { font-size: 1.2rem; font-weight: 700; }
 .detail-stat-label { color: var(--text-dim); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; }
 
-.stage-timeline { border-radius: 6px; overflow: hidden; }
+.chart-wrap.stage-wrap { flex: none; display: block; min-height: 0; padding: 0; }
+.stage-timeline { height: 40px; border-radius: 6px; overflow: hidden; }
 .stage-seg { cursor: crosshair; }
 .stage-awake    { fill: var(--cat-activity); }
 .stage-light    { fill: var(--cat-respiratory); }

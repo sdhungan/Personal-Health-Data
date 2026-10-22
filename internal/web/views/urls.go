@@ -43,6 +43,34 @@ func tileURL(kind, day string, expanded bool) string {
 	return APIURL("tile", url.Values{"kind": {kind}, "day": {day}, "expanded": {fmt.Sprintf("%t", expanded)}})
 }
 
+// Tile drag-and-drop: the header is the drag handle, the whole tile is the
+// drop target. $_dragKind/$_dragGroup (underscore = never sent to the
+// server) carry what's being dragged; a tile only accepts a drop from its
+// own group (see tileGroup), so a tile can't leave its section. The drop
+// moves the DOM node itself — "take the target's slot", same rule as the
+// server's moveTile — then persists the new order.
+func tileDragStartExpr(kind, group string) string {
+	return fmt.Sprintf("$_dragKind = '%s'; $_dragGroup = '%s'; evt.dataTransfer.effectAllowed = 'move'; "+
+		"evt.dataTransfer.setData('text/plain', '%s'); evt.dataTransfer.setDragImage(el.closest('.tile'), 20, 20)", kind, group, kind)
+}
+
+func tileDragOverExpr(group string) string {
+	return fmt.Sprintf("if ($_dragGroup === '%s') evt.preventDefault()", group)
+}
+
+func tileDropExpr(kind, group string) string {
+	return fmt.Sprintf("evt.preventDefault(); if ($_dragGroup !== '%s' || $_dragKind === '%s') return; "+
+		"let src = document.getElementById('tile-' + $_dragKind), sib = [...el.parentElement.children]; "+
+		"sib.indexOf(src) < sib.indexOf(el) ? el.after(src) : el.before(src); "+
+		"@post('%s&kind=' + $_dragKind)", group, kind, APIURL("tile/move", url.Values{"target": {kind}}))
+}
+
+// tileResizeURL is the save endpoint static/tile-resize.js posts a tile's
+// final width/height to (it appends those two params itself).
+func tileResizeURL(kind string) string {
+	return APIURL("tile/resize", url.Values{"kind": {kind}})
+}
+
 func syncURL(day, view string) string {
 	return APIURL("sync", url.Values{"day": {day}, "view": {view}})
 }
@@ -89,7 +117,7 @@ func boolJS(b bool) string {
 // initialSignals is the data-signals bootstrap for the outer <html>
 // element on a full page load.
 func initialSignals(day string) string {
-	b, _ := json.Marshal(map[string]any{"day": day, "view": "data", "detailOpen": false, "userMenuOpen": false})
+	b, _ := json.Marshal(map[string]any{"day": day, "view": "data", "detailOpen": false, "userMenuOpen": false, "_dragKind": "", "_dragGroup": ""})
 	return string(b)
 }
 

@@ -23,4 +23,27 @@ var Migrations = []string{
 		token_hash TEXT NOT NULL UNIQUE,
 		created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 	)`,
+	`CREATE TABLE dashboard_tile_layout (
+		user_id  INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+		kind     TEXT NOT NULL,
+		position INTEGER,
+		width    INTEGER CHECK (width BETWEEN 1 AND 5),
+		PRIMARY KEY (user_id, kind)
+	)`,
+	`ALTER TABLE dashboard_tile_layout ADD COLUMN height INTEGER CHECK (height BETWEEN 120 AND 1200)`,
+	// The dashboard moved from an auto-fill grid (5 columns at full width)
+	// to a fixed 12-column one: rebuild the table (SQLite can't alter a
+	// CHECK constraint) and rescale saved widths from fifths to twelfths.
+	`CREATE TABLE dashboard_tile_layout_new (
+		user_id  INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+		kind     TEXT NOT NULL,
+		position INTEGER,
+		width    INTEGER CHECK (width BETWEEN 1 AND 12),
+		height   INTEGER CHECK (height BETWEEN 120 AND 1200),
+		PRIMARY KEY (user_id, kind)
+	);
+	INSERT INTO dashboard_tile_layout_new (user_id, kind, position, width, height)
+		SELECT user_id, kind, position, CAST(ROUND(width * 12.0 / 5) AS INTEGER), height FROM dashboard_tile_layout;
+	DROP TABLE dashboard_tile_layout;
+	ALTER TABLE dashboard_tile_layout_new RENAME TO dashboard_tile_layout`,
 }

@@ -5,210 +5,185 @@ import (
 	"strings"
 )
 
-// renderBarChartSVG renders c as a small inline bar chart with an
-// optional goal line — server-rendered so no client-side charting
-// library is needed, consistent with the rest of this project's
-// "backend renders, browser displays" approach. id must be unique among
-// charts rendered on the page at once (see chartInstanceID) since it
-// namespaces the Datastar signals driving this chart's hover
-// crosshair/tooltip — purely client-side, no server round-trip per hover.
-func renderBarChartSVG(c ChartData, id string) string {
-	const (
-		width      = 340
-		height     = 160
-		leftAxis   = 34
-		bottomAxis = 20
-		topPad     = 10
-	)
-	plotW := float64(width - leftAxis - 10)
-	plotH := float64(height - bottomAxis - topPad)
+// Bar and line charts share one layout: the SVG's viewBox is 0..100 on both
+// axes with preserveAspectRatio="none", stretched over a .chart-plot box
+// that fills whatever space its tile gives it (see style.css). A plot
+// coordinate is therefore also a CSS percentage of that box, so the HTML
+// axis labels and the hover overlay are positioned with the very same
+// numbers — and since labels are HTML rather than SVG <text>, they stay
+// crisp and unstretched at any tile size. Strokes use
+// vector-effect: non-scaling-stroke for the same reason.
 
+// chartGridlines draws the 3 faint interior gridlines (quarters of the range).
+func chartGridlines(b *strings.Builder, axisMin, axisMax float64, y func(float64) float64) {
+	for _, frac := range []float64{0.25, 0.5, 0.75} {
+		gy := y(axisMin + (axisMax-axisMin)*frac)
+		fmt.Fprintf(b, `<line x1="0" y1="%.2f" x2="100" y2="%.2f" class="chart-gridline"/>`, gy, gy)
+	}
+}
+
+// chartYLabelSpans writes the 5 y-axis labels (min, quarters, max) as HTML.
+
+func chartYLabelSpans(b *strings.Builder, axisMin, axisMax float64, y func(float64) float64) {
+	for _, frac := range []float64{0, 0.25, 0.5, 0.75, 1} {
+		v := axisMin + (axisMax-axisMin)*frac
+		fmt.Fprintf(b, `<span class="chart-y-label" style="top:%.2f%%">%s</span>`, y(v), formatAxisNumber(v))
+	}
+}
+
+func chartXLabelSpan(b *strings.Builder, xpct float64, label string) {
+	fmt.Fprintf(b, `<span class="chart-x-label" style="left:%.2f%%">%s</span>`, xpct, escapeSVGText(label))
+}
+
+func chartOpen(b *strings.Builder, id string) {
+	fmt.Fprintf(b, `<div class="chart-wrap" data-signals="%s"><div class="chart-plot">`, escapeAttr(chartWrapSignals(id)))
+	b.WriteString(`<svg viewBox="0 0 100 100" class="chart-svg" preserveAspectRatio="none">`)
+}
+
+func chartClose(b *strings.Builder, id string) {
+	b.WriteString(renderChartOverlay(id))
+	b.WriteString(`</div></div>`)
+}
+
+// renderBarChartSVG renders c as an inline bar chart with an optional goal
+// line — server-rendered so no client-side charting library is needed,
+// consistent with the rest of this project's "backend renders, browser
+// displays" approach. id must be unique among charts rendered on the page
+// at once (see chartInstanceID) since it namespaces the Datastar signals
+// driving this chart's hover crosshair/tooltip — purely client-side, no
+// server round-trip per hover.
+func renderBarChartSVG(c ChartData, id string) string {
+	n := len(c.Values)
+	if n == 0 {
+		return ""
+	}
 	maxVal, minVal := 0.0, 0.0
 	for _, v := range c.Values {
-		if v > maxVal {
-			maxVal = v
-		}
-		if v < minVal {
-			minVal = v
-		}
+		maxVal = max(maxVal, v)
+		minVal = min(minVal, v)
 	}
-	if c.Goal != nil && *c.Goal > maxVal {
-		maxVal = *c.Goal
+	if c.Goal != nil {
+		maxVal = max(maxVal, *c.Goal)
 	}
 	if maxVal <= 0 {
 		maxVal = 1
 	}
 	// Round the axis ceiling up to a "nice" number so the top gridline
-	// reads cleanly (matches the reference dashboard's "40000" style).
-	// axisMin stays 0 for the common case (steps, calories, etc. never go
-	// negative) — only series like caloric deficit/surplus dip below zero,
-	// so the floor is rounded the same "nice" way, and the plotted range
-	// becomes [axisMin, axisMax] instead of always [0, axisMax].
+	// reads cleanly. axisMin stays 0 for the common case (steps, calories,
+	// etc. never go negative) — only series like caloric deficit/surplus
+	// dip below zero, so the floor is rounded the same "nice" way.
 	axisMax := niceCeiling(maxVal)
 	axisMin := 0.0
 	if minVal < 0 {
 		axisMin = -niceCeiling(-minVal)
 	}
-	axisRange := axisMax - axisMin
+	y := func(v float64) float64 { return 100 * (axisMax - v) / (axisMax - axisMin) }
 
-	n := len(c.Values)
-	if n == 0 {
-		return ""
-	}
-	barGap := plotW / float64(n) * 0.25
-	barW := plotW/float64(n) - barGap
-
-	valueToY := func(v float64) float64 { return topPad + plotH*(axisMax-v)/axisRange }
-	zeroY := valueToY(0)
+	slot := 100 / float64(n)
+	barW := slot * 0.75
 
 	var b strings.Builder
-	fmt.Fprintf(&b, `<div class="chart-wrap" data-signals="%s">`, escapeAttr(chartWrapSignals(id)))
-	fmt.Fprintf(&b, `<svg viewBox="0 0 %d %d" class="chart-svg" preserveAspectRatio="xMidYMid meet">`, width, height)
-
-	// Axis lines + faint intermediate gridlines (standardized: every chart
-	// gets the same tick density) so values can be eyeballed without
-	// needing to hover.
-	fmt.Fprintf(&b, `<line x1="%d" y1="%d" x2="%d" y2="%d" class="chart-axis"/>`,
-		leftAxis, int(topPad), leftAxis, height-bottomAxis)
-	fmt.Fprintf(&b, `<line x1="%d" y1="%d" x2="%d" y2="%d" class="chart-axis"/>`,
-		leftAxis, height-bottomAxis, width-5, height-bottomAxis)
-	for _, frac := range []float64{0.25, 0.5, 0.75} {
-		v := axisMin + axisRange*frac
-		gy := valueToY(v)
-		fmt.Fprintf(&b, `<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" class="chart-gridline"/>`, leftAxis, gy, width-5, gy)
-		fmt.Fprintf(&b, `<text x="0" y="%.1f" class="chart-axis-label">%s</text>`, gy+3, formatAxisNumber(v))
-	}
-	fmt.Fprintf(&b, `<text x="0" y="%d" class="chart-axis-label">%s</text>`, int(topPad)+6, formatAxisNumber(axisMax))
-	fmt.Fprintf(&b, `<text x="0" y="%d" class="chart-axis-label">%s</text>`, height-bottomAxis+4, formatAxisNumber(axisMin))
-
+	chartOpen(&b, id)
+	chartGridlines(&b, axisMin, axisMax, y)
 	// Explicit zero baseline once the range dips below zero — bars anchor
-	// here instead of the bottom edge, so it needs to read clearly as "0",
-	// distinct from the plot's own bottom border.
+	// here instead of the bottom edge.
 	if axisMin < 0 {
-		fmt.Fprintf(&b, `<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" class="chart-axis"/>`, leftAxis, zeroY, width-5, zeroY)
+		fmt.Fprintf(&b, `<line x1="0" y1="%.2f" x2="100" y2="%.2f" class="chart-axis"/>`, y(0), y(0))
 	}
-
-	// Goal line.
 	if c.Goal != nil {
-		goalY := valueToY(*c.Goal)
-		fmt.Fprintf(&b, `<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" class="chart-goal-line"/>`,
-			leftAxis, goalY, width-5, goalY)
-		fmt.Fprintf(&b, `<text x="%d" y="%.1f" class="chart-goal-label">Goal: %s</text>`,
-			width-140, goalY-6, formatAxisNumber(*c.Goal))
+		fmt.Fprintf(&b, `<line x1="0" y1="%.2f" x2="100" y2="%.2f" class="chart-goal-line"/>`, y(*c.Goal), y(*c.Goal))
 	}
-
-	// Bars, each anchored at the zero baseline and extending up (positive
-	// values) or down (negative values) from it, and each a discrete hover
-	// target — snapping the crosshair/tooltip straight to the exact value
-	// is more precise for "read the exact measurement" than a
-	// free-floating continuous crosshair would be.
+	// Each bar is a discrete hover target — snapping the crosshair/tooltip
+	// straight to the exact value is more precise than a free-floating
+	// continuous crosshair would be.
 	for i, v := range c.Values {
-		x := float64(leftAxis) + float64(i)*(barW+barGap) + barGap/2
-		top := valueToY(max(v, 0))
-		bottom := valueToY(min(v, 0))
-		barH := bottom - top
-		y := top
+		x := float64(i)*slot + (slot-barW)/2
+		top, bottom := y(max(v, 0)), y(min(v, 0))
 		label := ""
 		if i < len(c.Labels) {
 			label = c.Labels[i]
 		}
-		xpct := (x + barW/2) / width * 100
-		ypct := y / height * 100
-		fmt.Fprintf(&b, `<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" class="chart-bar" %s/>`,
-			x, y, barW, barH, hoverAttrs(id, xpct, ypct, label, formatAxisNumber(v)))
+		fmt.Fprintf(&b, `<rect x="%.2f" y="%.2f" width="%.2f" height="%.2f" class="chart-bar" %s/>`,
+			x, top, barW, bottom-top, hoverAttrs(id, x+barW/2, top, label, formatAxisNumber(v)))
+	}
+	b.WriteString(`</svg>`)
+
+	chartYLabelSpans(&b, axisMin, axisMax, y)
+	for i, label := range c.Labels {
 		if label != "" {
-			fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="chart-bar-label">%s</text>`,
-				x+barW/2, height-4, escapeSVGText(label))
+			chartXLabelSpan(&b, (float64(i)+0.5)*slot, label)
 		}
 	}
-
-	b.WriteString(`</svg>`)
-	b.WriteString(renderChartOverlay(id))
-	b.WriteString(`</div>`)
+	if c.Goal != nil {
+		fmt.Fprintf(&b, `<span class="chart-goal-label" style="top:%.2f%%">Goal: %s</span>`, y(*c.Goal), formatAxisNumber(*c.Goal))
+	}
+	chartClose(&b, id)
 	return b.String()
 }
 
 // renderLineChartSVG renders a value-over-time line (heart rate, intraday
-// or per-activity) with the same hover crosshair/tooltip and gridline
-// treatment as renderBarChartSVG. unit suffixes the hover tooltip value.
+// or per-activity; resting HR/HRV over 7 days) with the same hover
+// crosshair/tooltip and gridline treatment as renderBarChartSVG. unit
+// suffixes the hover tooltip value.
 func renderLineChartSVG(samples []HRSample, id, unit string) string {
-	const (
-		width      = 480
-		height     = 140
-		leftAxis   = 34
-		bottomAxis = 18
-		topPad     = 10
-	)
-	if len(samples) == 0 {
+	n := len(samples)
+	if n == 0 {
 		return ""
 	}
-	plotW := float64(width - leftAxis - 10)
-	plotH := float64(height - bottomAxis - topPad)
-
 	minV, maxV := samples[0].Bpm, samples[0].Bpm
 	for _, s := range samples {
-		if s.Bpm < minV {
-			minV = s.Bpm
-		}
-		if s.Bpm > maxV {
-			maxV = s.Bpm
-		}
+		minV = min(minV, s.Bpm)
+		maxV = max(maxV, s.Bpm)
 	}
 	// Dynamic y-axis: data min-10 to max+10, never anchored at 0, so a
 	// day-to-day trend (resting HR, HRV) stays visible.
 	minV -= 10
 	maxV += 10
 
-	n := len(samples)
-	xAt := func(i int) float64 { return float64(leftAxis) + plotW*float64(i)/float64(max(n-1, 1)) }
-	yAt := func(bpm float64) float64 { return topPad + plotH*(1-(bpm-minV)/(maxV-minV)) }
+	x := func(i int) float64 {
+		if n == 1 {
+			return 50
+		}
+		return 100 * float64(i) / float64(n-1)
+	}
+	y := func(v float64) float64 { return 100 * (maxV - v) / (maxV - minV) }
 
 	var b strings.Builder
-	fmt.Fprintf(&b, `<div class="chart-wrap" data-signals="%s">`, escapeAttr(chartWrapSignals(id)))
-	fmt.Fprintf(&b, `<svg viewBox="0 0 %d %d" class="chart-svg" preserveAspectRatio="xMidYMid meet">`, width, height)
-	fmt.Fprintf(&b, `<line x1="%d" y1="%d" x2="%d" y2="%d" class="chart-axis"/>`, leftAxis, int(topPad), leftAxis, height-bottomAxis)
-	fmt.Fprintf(&b, `<line x1="%d" y1="%d" x2="%d" y2="%d" class="chart-axis"/>`, leftAxis, height-bottomAxis, width-5, height-bottomAxis)
-	for _, frac := range []float64{0.25, 0.5, 0.75} {
-		v := minV + (maxV-minV)*frac
-		gy := yAt(v)
-		fmt.Fprintf(&b, `<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" class="chart-gridline"/>`, leftAxis, gy, width-5, gy)
-		fmt.Fprintf(&b, `<text x="0" y="%.1f" class="chart-axis-label">%s</text>`, gy+3, formatAxisNumber(v))
-	}
-	fmt.Fprintf(&b, `<text x="0" y="%d" class="chart-axis-label">%s</text>`, int(topPad)+6, formatAxisNumber(maxV))
-	fmt.Fprintf(&b, `<text x="0" y="%d" class="chart-axis-label">%s</text>`, height-bottomAxis+4, formatAxisNumber(minV))
-
-	// Standardized time-axis ticks: up to 5 evenly spaced labels rather
-	// than one per sample (which for a few hundred intraday points would
-	// be illegible), matching the hourly steps chart's every-Nth-label
-	// treatment.
-	tickEvery := max(n/5, 1)
-	for i := 0; i < n; i += tickEvery {
-		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="chart-bar-label">%s</text>`,
-			xAt(i), height-2, escapeSVGText(samples[i].TimeLabel))
-	}
+	chartOpen(&b, id)
+	chartGridlines(&b, minV, maxV, y)
 
 	var points strings.Builder
 	for i, s := range samples {
 		if i > 0 {
 			points.WriteByte(' ')
 		}
-		fmt.Fprintf(&points, "%.1f,%.1f", xAt(i), yAt(s.Bpm))
+		fmt.Fprintf(&points, "%.2f,%.2f", x(i), y(s.Bpm))
 	}
 	fmt.Fprintf(&b, `<polyline points="%s" class="chart-line"/>`, points.String())
 
-	// One larger, invisible hover target per sample (easier to hit than
-	// the 1-2px visual line) rather than tracking mouse position
-	// continuously — same discrete snap-to-point precision as the bars.
+	// One full-height invisible column per sample, reaching halfway to its
+	// neighbours, as the hover target — easier to hit than the thin line,
+	// and unlike a circle it doesn't distort when the plot stretches.
 	for i, s := range samples {
-		x, y := xAt(i), yAt(s.Bpm)
-		xpct, ypct := x/width*100, y/height*100
-		fmt.Fprintf(&b, `<circle cx="%.1f" cy="%.1f" r="8" class="chart-hit-target" %s/>`,
-			x, y, hoverAttrs(id, xpct, ypct, s.TimeLabel, formatAxisNumber(s.Bpm)+" "+unit))
+		left, right := 0.0, 100.0
+		if i > 0 {
+			left = (x(i-1) + x(i)) / 2
+		}
+		if i < n-1 {
+			right = (x(i) + x(i+1)) / 2
+		}
+		fmt.Fprintf(&b, `<rect x="%.2f" y="0" width="%.2f" height="100" class="chart-hit-target" %s/>`,
+			left, right-left, hoverAttrs(id, x(i), y(s.Bpm), s.TimeLabel, formatAxisNumber(s.Bpm)+" "+unit))
 	}
-
 	b.WriteString(`</svg>`)
-	b.WriteString(renderChartOverlay(id))
-	b.WriteString(`</div>`)
+
+	chartYLabelSpans(&b, minV, maxV, y)
+	// Up to 5 evenly spaced time labels rather than one per sample (which
+	// for a few hundred intraday points would be illegible).
+	for i := 0; i < n; i += max(n/5, 1) {
+		chartXLabelSpan(&b, x(i), samples[i].TimeLabel)
+	}
+	chartClose(&b, id)
 	return b.String()
 }
 
@@ -348,7 +323,7 @@ func renderStageTimelineSVG(stages []StageSegment, id string) string {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, `<div class="chart-wrap" data-signals="%s">`, escapeAttr(chartWrapSignals(id)))
+	fmt.Fprintf(&b, `<div class="chart-wrap stage-wrap" data-signals="%s">`, escapeAttr(chartWrapSignals(id)))
 	fmt.Fprintf(&b, `<svg viewBox="0 0 %d %d" class="chart-svg stage-timeline" preserveAspectRatio="none">`, width, height)
 	for _, s := range stages {
 		start := clampPct(s.StartPct) * width
