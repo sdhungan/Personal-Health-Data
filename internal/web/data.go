@@ -400,6 +400,23 @@ func buildStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileDa
 		if len(detail.Stages) > 0 {
 			t.Empty = false
 		}
+	case "resting_hr", "hrv":
+		// 7-day line over only the days with data — a missing day plotted
+		// as 0 would drag the dynamic y-axis floor down with it.
+		d := &views.DetailData{Kind: "line", LineUnit: def.Unit}
+		var total float64
+		for i := 6; i >= 0; i-- {
+			dd := day.AddDate(0, 0, -i)
+			if v, ok := def.Extract(history[dd.Format(dateLayout)]); ok {
+				d.LineSamples = append(d.LineSamples, views.HRSample{TimeLabel: dd.Format("Mon"), Bpm: v})
+				total += v
+			}
+		}
+		if n := len(d.LineSamples); n > 0 {
+			d.Stats = []views.StatItem{{Label: "7-day average", Value: def.Format(total / float64(n))}}
+			t.Detail = d
+			t.Empty = false
+		}
 	default:
 		if chart := buildChart(day, history, def.Extract, nil); chart != nil {
 			t.Chart = chart
@@ -492,7 +509,7 @@ func fetchHeartRateDetail(ctx context.Context, db *sql.DB, userID int64, day tim
 	}
 	defer rows.Close()
 
-	d := &views.DetailData{Kind: "line"}
+	d := &views.DetailData{Kind: "line", LineUnit: "bpm"}
 	var minV, maxV, sum float64
 	for rows.Next() {
 		var ts string

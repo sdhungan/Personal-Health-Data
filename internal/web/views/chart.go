@@ -130,8 +130,8 @@ func renderBarChartSVG(c ChartData, id string) string {
 
 // renderLineChartSVG renders a value-over-time line (heart rate, intraday
 // or per-activity) with the same hover crosshair/tooltip and gridline
-// treatment as renderBarChartSVG.
-func renderLineChartSVG(samples []HRSample, id string) string {
+// treatment as renderBarChartSVG. unit suffixes the hover tooltip value.
+func renderLineChartSVG(samples []HRSample, id, unit string) string {
 	const (
 		width      = 480
 		height     = 140
@@ -154,12 +154,10 @@ func renderLineChartSVG(samples []HRSample, id string) string {
 			maxV = s.Bpm
 		}
 	}
-	if maxV == minV {
-		maxV = minV + 1
-	}
-	pad := (maxV - minV) * 0.1
-	minV -= pad
-	maxV += pad
+	// Dynamic y-axis: data min-10 to max+10, never anchored at 0, so a
+	// day-to-day trend (resting HR, HRV) stays visible.
+	minV -= 10
+	maxV += 10
 
 	n := len(samples)
 	xAt := func(i int) float64 { return float64(leftAxis) + plotW*float64(i)/float64(max(n-1, 1)) }
@@ -205,7 +203,7 @@ func renderLineChartSVG(samples []HRSample, id string) string {
 		x, y := xAt(i), yAt(s.Bpm)
 		xpct, ypct := x/width*100, y/height*100
 		fmt.Fprintf(&b, `<circle cx="%.1f" cy="%.1f" r="8" class="chart-hit-target" %s/>`,
-			x, y, hoverAttrs(id, xpct, ypct, s.TimeLabel, formatAxisNumber(s.Bpm)+" bpm"))
+			x, y, hoverAttrs(id, xpct, ypct, s.TimeLabel, formatAxisNumber(s.Bpm)+" "+unit))
 	}
 
 	b.WriteString(`</svg>`)

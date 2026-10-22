@@ -20,7 +20,7 @@ templ ActivityDetailFragment(d ActivityDetail) {
 		</div>
 		if len(d.HeartRateSamples) > 0 {
 			<h3>Heart rate</h3>
-			@templ.Raw(renderLineChartSVG(d.HeartRateSamples, chartInstanceID(fmt.Sprintf("activity_%d", d.ID))))
+			@templ.Raw(renderLineChartSVG(d.HeartRateSamples, chartInstanceID(fmt.Sprintf("activity_%d", d.ID)), "bpm"))
 		} else {
 			<p class="tile-empty">No heart rate data linked to this activity.</p>
 		}

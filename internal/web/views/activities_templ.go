@@ -132,7 +132,7 @@ func ActivityDetailFragment(d ActivityDetail) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templ.Raw(renderLineChartSVG(d.HeartRateSamples, chartInstanceID(fmt.Sprintf("activity_%d", d.ID)))).Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = templ.Raw(renderLineChartSVG(d.HeartRateSamples, chartInstanceID(fmt.Sprintf("activity_%d", d.ID)), "bpm")).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
