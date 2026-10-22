@@ -93,6 +93,60 @@ func TestSQLStoreLatestDayAndUnresolvedDays(t *testing.T) {
 	}
 }
 
+func TestSQLStoreEarliestDay(t *testing.T) {
+	store, _ := newTestSQLStore(t)
+	ctx := context.Background()
+
+	if _, ok, err := store.EarliestDay(ctx, "google_health"); err != nil {
+		t.Fatalf("EarliestDay on empty store: %v", err)
+	} else if ok {
+		t.Error("EarliestDay on empty store: ok = true, want false")
+	}
+
+	for _, day := range []string{"2026-07-29", "2026-07-28", "2026-07-30"} {
+		if err := store.EnsurePending(ctx, "google_health", day); err != nil {
+			t.Fatalf("EnsurePending(%s): %v", day, err)
+		}
+	}
+
+	earliest, ok, err := store.EarliestDay(ctx, "google_health")
+	if err != nil || !ok {
+		t.Fatalf("EarliestDay: %v, ok=%v", err, ok)
+	}
+	if earliest != "2026-07-28" {
+		t.Errorf("EarliestDay = %q, want 2026-07-28 (the oldest tracked day, regardless of insertion order)", earliest)
+	}
+}
+
+func TestSQLStoreStatus(t *testing.T) {
+	store, _ := newTestSQLStore(t)
+	ctx := context.Background()
+
+	if _, ok, err := store.Status(ctx, "google_health", "2026-07-30"); err != nil {
+		t.Fatalf("Status on untracked day: %v", err)
+	} else if ok {
+		t.Error("Status on untracked day: ok = true, want false (never attempted)")
+	}
+
+	if err := store.EnsurePending(ctx, "google_health", "2026-07-30"); err != nil {
+		t.Fatalf("EnsurePending: %v", err)
+	}
+	if status, ok, err := store.Status(ctx, "google_health", "2026-07-30"); err != nil || !ok {
+		t.Fatalf("Status after EnsurePending: %v, ok=%v", err, ok)
+	} else if status != StatusPending {
+		t.Errorf("Status after EnsurePending = %q, want %q", status, StatusPending)
+	}
+
+	if err := store.SetStatus(ctx, "google_health", "2026-07-30", StatusComplete); err != nil {
+		t.Fatalf("SetStatus: %v", err)
+	}
+	if status, ok, err := store.Status(ctx, "google_health", "2026-07-30"); err != nil || !ok {
+		t.Fatalf("Status after SetStatus: %v, ok=%v", err, ok)
+	} else if status != StatusComplete {
+		t.Errorf("Status after SetStatus = %q, want %q", status, StatusComplete)
+	}
+}
+
 // TestRunDayAgainstRealSQLStore exercises the full state machine against a
 // real (in-memory) SQLite-backed StateStore rather than the fake used in
 // engine_test.go, to prove the SQL implementation and the state machine

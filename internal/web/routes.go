@@ -32,6 +32,7 @@ func (s *Server) registerRoutes() {
 	s.echo.GET("/settings/google-client", s.handleGoogleClientSettingsPage, auth)
 	s.echo.POST("/settings/google-client", s.handleGoogleClientUpload, auth)
 	s.echo.POST("/settings/google-client/connect", s.handleGoogleClientConnectAccount, auth)
+	s.echo.POST("/settings/google-client/bulk-sync", s.handleGoogleBulkSync, auth)
 	s.echo.GET("/settings/account", s.handleAccountSettingsPage, auth)
 	s.echo.POST("/settings/account/delete", s.handleAccountDelete, auth)
 	s.echo.GET("/settings/mcp-connector", s.handleMCPConnectorPage, auth)

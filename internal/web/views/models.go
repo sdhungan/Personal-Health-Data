@@ -36,6 +36,23 @@ type DashboardData struct {
 	CronometerMessage   string
 }
 
+// GoogleBulkSyncStatus drives the "Bulk sync" section of
+// GoogleClientSettingsPage. HasHistory selects which form is shown: a
+// one-click "catch up to today" button once this account has any prior
+// google_health sync_state history, or a date-range picker (capped at 30
+// days server-side) for a brand-new connection with none yet. Running means
+// a bulk sync is currently executing in the background (see
+// Server.handleGoogleBulkSync) — the page shows a spinner-ish message and
+// auto-refreshes instead of a form. Summary/Err report the outcome of the
+// most recent run once it's no longer Running.
+type GoogleBulkSyncStatus struct {
+	HasHistory bool
+	Running    bool
+	Summary    string
+	Err        string
+	Today      string // "YYYY-MM-DD", today's date — the range picker's default/max
+}
+
 // TileKind selects which body a tile renders.
 type TileKind string
 

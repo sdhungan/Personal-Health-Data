@@ -93,6 +93,40 @@ type Server struct {
 	// other users) from blocking on each other.
 	syncingDays sync.Map // "userID/day" string -> struct{}
 
+	// bulkSyncs tracks the one bulk sync a user can have in flight (see
+	// handleGoogleBulkSync) plus the outcome of their last one, so the
+	// settings page can render "running" vs. a final summary/error without
+	// any other persisted state.
+	bulkSyncs sync.Map // int64 userID -> *bulkSyncStatus
+}
+
+// bulkSyncStatus is the mutable state behind one user's
+// views.GoogleBulkSyncStatus — guarded by its own mutex since the
+// background goroutine writes it while the settings page's GET handler
+// reads it concurrently.
+type bulkSyncStatus struct {
+	mu      sync.Mutex
+	running bool
+	summary string
+	err     string
+}
+
+func (b *bulkSyncStatus) snapshot() (running bool, summary, errStr string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.running, b.summary, b.err
+}
+
+func (b *bulkSyncStatus) finish(summary string, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.running = false
+	b.summary = summary
+	if err != nil {
+		b.err = err.Error()
+	} else {
+		b.err = ""
+	}
 }
 
 // New builds the Echo app and registers every route. store is used for the

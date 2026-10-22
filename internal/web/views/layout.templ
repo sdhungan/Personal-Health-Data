@@ -136,6 +136,21 @@ templ JournalViewBody(data DashboardData, j JournalData) {
 	</div>
 }
 
+// SyncingViewBody renders into #view-body while a day that's never been
+// resolved before is synced transparently on first view (see
+// Server.dayNeedsAutoSync) — DataViewBody replaces this once that finishes.
+// Keeps ViewTabs/DayNav so the day header and prev/next/today controls stay
+// usable while the fetch is in flight.
+templ SyncingViewBody(data DashboardData) {
+	<div id="view-body">
+		@ViewTabs(data)
+		@DayNav(data)
+		<div class="tile-empty" style="padding: 40px; text-align: center;">
+			Syncing this day for the first time — hang tight…
+		</div>
+	</div>
+}
+
 templ ViewTabs(data DashboardData) {
 	<div class="view-tabs">
 		<button class={ "view-tab", templ.KV("active", data.View != "journal") } data-on:click={ getExpr(viewURL(data.Day, "data")) }>

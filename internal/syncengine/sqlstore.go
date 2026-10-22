@@ -59,6 +59,42 @@ func (s *SQLStore) LatestDay(ctx context.Context, source string) (string, bool, 
 	return day, true, nil
 }
 
+// EarliestDay returns the oldest day (any status) ever tracked for source —
+// "the first day of viewing" a full-history bulk sync walks forward from
+// (see Server.runGoogleCatchUpSync), as opposed to LatestDay's tail end.
+func (s *SQLStore) EarliestDay(ctx context.Context, source string) (string, bool, error) {
+	var day string
+	err := s.DB.QueryRowContext(ctx, `
+		SELECT day FROM sync_state WHERE user_id = ? AND source = ? ORDER BY day ASC LIMIT 1
+	`, s.UserID, source).Scan(&day)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("finding earliest sync_state day for user %d %s: %w", s.UserID, source, err)
+	}
+	return day, true, nil
+}
+
+// Status returns the current status of one specific (source, day), or
+// ok=false if no row exists yet — the "was this day ever even attempted"
+// check both the full-history bulk sync and the dashboard's auto-sync-on-
+// view (Server.dayNeedsAutoSync) need, distinct from LatestDay/UnresolvedDays
+// which only ever look at the tracked range's edges.
+func (s *SQLStore) Status(ctx context.Context, source, day string) (string, bool, error) {
+	var status string
+	err := s.DB.QueryRowContext(ctx, `
+		SELECT status FROM sync_state WHERE user_id = ? AND source = ? AND day = ?
+	`, s.UserID, source, day).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("getting sync_state status for user %d %s/%s: %w", s.UserID, source, day, err)
+	}
+	return status, true, nil
+}
+
 func (s *SQLStore) UnresolvedDays(ctx context.Context, source, beforeDay string) ([]string, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT day FROM sync_state

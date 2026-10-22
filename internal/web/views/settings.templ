@@ -22,12 +22,15 @@ package views
 // handleGoogleClientSettingsPage) — shown as its own distinct banner so
 // neither action looks like a no-op afterward. errMsg surfaces a failure
 // from whichever of the two actions was just attempted.
-templ GoogleClientSettingsPage(configured, lockedByFlag bool, successMsg, errMsg string, username string, googleConnected bool) {
+templ GoogleClientSettingsPage(configured, lockedByFlag bool, successMsg, errMsg string, username string, googleConnected bool, bulk GoogleBulkSyncStatus) {
 	<!DOCTYPE html>
 	<html lang="en">
 		<head>
 			<meta charset="UTF-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			if bulk.Running {
+				<meta http-equiv="refresh" content="5"/>
+			}
 			<title>Google settings — Personal Health Dashboard</title>
 			@themeScript()
 			<link rel="stylesheet" href="/static/style.css"/>
@@ -94,6 +97,47 @@ templ GoogleClientSettingsPage(configured, lockedByFlag bool, successMsg, errMsg
 					</form>
 				} else {
 					<p class="journal-error">Upload a client above first — there's nothing for { username } to connect through yet.</p>
+				}
+
+				if googleConnected {
+					<h2 class="brand-title" style="font-size:1.1rem">Bulk sync</h2>
+					if bulk.Running {
+						<p>Bulk sync running in the background — this page refreshes itself every few seconds.</p>
+					} else {
+						if bulk.Err != "" {
+							<p class="journal-error">{ bulk.Err }</p>
+						} else if bulk.Summary != "" {
+							<p class="body-saved-status">&#10003; { bulk.Summary }</p>
+						}
+						if bulk.HasHistory {
+							<p>Fill in every day missed since your last sync, up through today.</p>
+							<form method="post" action="/settings/google-client/bulk-sync" class="body-form">
+								<div class="body-form-footer">
+									<button type="submit" class="body-carry-btn">Catch up sync</button>
+								</div>
+							</form>
+						} else {
+							<p>
+								First bulk sync: pick a date range to backfill. Maximum range is
+								30 days per sync — for more history than that, run this again
+								with another (non-overlapping) 30-day-or-less range once this one
+								finishes.
+							</p>
+							<form method="post" action="/settings/google-client/bulk-sync" class="body-form">
+								<div class="body-field">
+									<label for="bulk-start">Start date</label>
+									<input id="bulk-start" name="start" type="date" required max={ bulk.Today }/>
+								</div>
+								<div class="body-field">
+									<label for="bulk-end">End date</label>
+									<input id="bulk-end" name="end" type="date" required value={ bulk.Today } max={ bulk.Today }/>
+								</div>
+								<div class="body-form-footer">
+									<button type="submit" class="body-carry-btn">Start bulk sync</button>
+								</div>
+							</form>
+						}
+					}
 				}
 
 				<p><a href="/">&larr; Back to dashboard</a></p>

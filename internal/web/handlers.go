@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/starfederation/datastar-go/datastar"
+	"go.uber.org/zap"
 
 	"github.com/sdhungan/Personal-Health-Data/internal/googleauth"
 	"github.com/sdhungan/Personal-Health-Data/internal/syncengine"
@@ -167,10 +167,18 @@ func (s *Server) handleIndex(c echo.Context) error {
 }
 
 // handleView answers day-navigation and data/journal tab switches by
-// patching #view-body via SSE.
+// patching #view-body via SSE. For the data view, a day that's never been
+// resolved by Google Health sync (see dayNeedsAutoSync) is synced
+// transparently first, rather than just showing an empty dashboard for a
+// day nobody happened to have synced yet — the same reasoning
+// handleForceSync's "Sync" button already gives a manual click, just
+// triggered automatically by the act of viewing the day. The journal view
+// carries no such sync (journal entries are hand-typed, not synced from
+// anywhere) so it's unaffected.
 func (s *Server) handleView(c echo.Context) error {
 	ctx := c.Request().Context()
 	day := parseDay(c)
+	dayStr := day.Format(dateLayout)
 	view := c.QueryParam("view")
 	if view != "journal" {
 		view = "data"
@@ -180,17 +188,40 @@ func (s *Server) handleView(c echo.Context) error {
 	sse := datastar.NewSSE(c.Response(), c.Request())
 
 	if view == "journal" {
-		j, err := fetchJournal(ctx, s.DB, userID, day.Format(dateLayout))
+		j, err := fetchJournal(ctx, s.DB, userID, dayStr)
 		if err != nil {
 			return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
 		}
 		data := views.DashboardData{
-			Day: day.Format(dateLayout), DayLabel: dayLabel(day),
+			Day: dayStr, DayLabel: dayLabel(day),
 			PrevDay: day.AddDate(0, 0, -1).Format(dateLayout), NextDay: day.AddDate(0, 0, 1).Format(dateLayout),
 			Today: time.Now().Format(dateLayout),
 			View:  "journal",
 		}
 		return sse.PatchElementTempl(views.JournalViewBody(data, j))
+	}
+
+	if s.dayNeedsAutoSync(ctx, userID, dayStr) {
+		if done, started := s.syncDayAllSources(userID, day, dayStr); started {
+			loading := views.DashboardData{
+				Day: dayStr, DayLabel: dayLabel(day),
+				PrevDay: day.AddDate(0, 0, -1).Format(dateLayout), NextDay: day.AddDate(0, 0, 1).Format(dateLayout),
+				Today: time.Now().Format(dateLayout), View: "data",
+			}
+			if err := sse.PatchElementTempl(views.SyncingViewBody(loading)); err != nil {
+				return err
+			}
+			select {
+			case <-done:
+				// Ignore the result either way: buildDashboardData below
+				// renders whatever's on file now, same as it would after
+				// any other sync — an error here shows up the same way a
+				// genuinely empty day already does, rather than needing a
+				// second error path.
+			case <-c.Request().Context().Done():
+				return nil
+			}
+		}
 	}
 
 	data, err := buildDashboardData(ctx, s.DB, userID, day, "data", DefaultTileKinds, s.cronometerConnected(userID))
@@ -256,67 +287,71 @@ func (s *Server) handleTile(c echo.Context) error {
 	return sse.PatchElementTempl(views.Tile(t, day.Format(dateLayout)))
 }
 
-// handleForceSync answers the dashboard's "Sync" button: an on-demand,
-// unconditional sync of one day's data from every connected source
-// (Google Health always, Cronometer too once its account card shows
-// connected) — the manual override to the day-completeness engine's
-// normal pending/partial-only automatic sync (internal/syncengine), useful
-// both for filling in a day the automatic pass gave up on and for testing
-// without waiting for the cron schedule. The two sources run concurrently
-// (see runSource below) rather than one after the other, since they're
-// deliberately independent (schema.sql: "a Cronometer outage/breakage
-// never touches watch data or vice versa") and there's no reason to make
-// the button wait twice as long.
+// daySyncResult is Google Health's own outcome from one syncDayAllSources
+// run — Cronometer's result (if it ran too) is recorded to sync_state the
+// same way but never reported back to a caller, same non-fatal posture
+// internal/cli/sync.go already takes for the scheduled pass.
+type daySyncResult struct {
+	hasData bool
+	err     error
+}
+
+// syncDayAllSources kicks off (in a goroutine against context.Background,
+// so it keeps running and keeps writing even if the browser navigates away
+// or the request that started it is cancelled) an unconditional sync of
+// day across every source userID has connected — Google Health (required;
+// started=false if it isn't connected yet) and Cronometer too, once its
+// account card shows connected, concurrently rather than one after the
+// other, since they're deliberately independent (schema.sql: "a Cronometer
+// outage/breakage never touches watch data or vice versa") and there's no
+// reason to make a caller wait twice as long.
 //
-// A full day's sync takes many real API calls (heart-rate alone can be
-// thousands of samples) and can run 15-20+ seconds, so this must not hold
-// the request/DB up for that whole time: it kicks the sync off in a
-// goroutine (using its own background context, so it keeps running and
-// keeps writing even if the browser navigates away or the SSE connection
-// drops), immediately morphs the Sync button into a spinner, and only
-// morphs the full view back in once the sync actually finishes. Only the
-// specific (user, day) pair being synced is serialized (via s.syncingDays)
-// — a duplicate click just re-shows the spinner rather than starting a
-// second concurrent sync of the same day; every other day (or other
-// user's same day) keeps working normally, and WAL mode (internal/db.Store)
-// keeps normal reads from ever blocking on this write.
-func (s *Server) handleForceSync(c echo.Context) error {
-	reqCtx := c.Request().Context()
-	day := parseDay(c)
-	dayStr := day.Format(dateLayout)
-	view := c.QueryParam("view")
-	if view != "journal" {
-		view = "data"
+// Only one sync per (user, day) pair runs at a time, serialized via
+// s.syncingDays: a caller that finds one already in flight gets
+// started=false too and must not start a redundant one — it isn't the
+// caller that owns that run, so it has no result channel to wait on either;
+// showing the day's already-in-flight indicator again is enough (see
+// handleForceSync). Every other day (or other user's same day) keeps
+// working normally, and WAL mode (internal/db.Store) keeps normal reads
+// from ever blocking on this write.
+// recordSyncState sets (source, dayStr)'s sync_state row to status,
+// logging rather than silently dropping a failure here — shared by every
+// caller that persists a day's outcome after a successful SyncDay
+// (syncDayAllSources below, and settings.go's two bulk-sync loops): the
+// day's actual data already synced fine by this point, so a failure here
+// only risks that day being needlessly re-attempted next pass, not lost,
+// but "needlessly re-attempted forever with zero trace of why" is exactly
+// the kind of silent-failure gap this file's manual-sync logging was
+// added to close in the first place.
+func (s *Server) recordSyncState(ctx context.Context, state *syncengine.SQLStore, source, dayStr, status string) {
+	if err := state.EnsurePending(ctx, source, dayStr); err != nil {
+		s.Logger.Error("recording sync_state failed", zap.Int64("user_id", state.UserID),
+			zap.String("source", source), zap.String("day", dayStr), zap.Error(err))
+		return
 	}
-	userID := webauth.CurrentUserID(c)
-	syncKey := fmt.Sprintf("%d/%s", userID, dayStr)
+	if err := state.SetStatus(ctx, source, dayStr, status); err != nil {
+		s.Logger.Error("recording sync_state failed", zap.Int64("user_id", state.UserID),
+			zap.String("source", source), zap.String("day", dayStr), zap.Error(err))
+	}
+}
 
-	sse := datastar.NewSSE(c.Response(), c.Request())
-
+func (s *Server) syncDayAllSources(userID int64, day time.Time, dayStr string) (result <-chan daySyncResult, started bool) {
 	googleSync := s.userGoogleSyncer(userID)
 	if googleSync == nil {
-		return sse.PatchElementTempl(views.ErrorFragment(`Google Health isn't authorized yet — connect it from the onboarding/account page first.`))
+		return nil, false
 	}
-
+	syncKey := fmt.Sprintf("%d/%s", userID, dayStr)
 	if _, alreadySyncing := s.syncingDays.LoadOrStore(syncKey, struct{}{}); alreadySyncing {
-		return sse.PatchElementTempl(views.SyncButton(dayStr, view, true))
+		return nil, false
 	}
+	s.Logger.Info("manual sync started", zap.Int64("user_id", userID), zap.String("day", dayStr))
 
-	if err := sse.PatchElementTempl(views.SyncButton(dayStr, view, true)); err != nil {
-		s.syncingDays.Delete(syncKey)
-		return err
-	}
-
-	type syncResult struct {
-		hasData bool
-		err     error
-	}
 	// runSource syncs one source's day and records the resulting
 	// sync_state status — today always stays "partial" regardless of what
 	// was found, since it's still in progress by definition and a manual
 	// sync doesn't change that (see internal/syncengine.RunDay's doc
 	// comment on why today is never auto-promoted).
-	runSource := func(bgCtx context.Context, source string, syncer syncengine.DaySyncer, state *syncengine.SQLStore) syncResult {
+	runSource := func(bgCtx context.Context, source string, syncer syncengine.DaySyncer, state *syncengine.SQLStore) daySyncResult {
 		hasData, err := syncer.SyncDay(bgCtx, day)
 		if err == nil {
 			status := syncengine.StatusComplete
@@ -326,28 +361,26 @@ func (s *Server) handleForceSync(c echo.Context) error {
 			if dayStr == time.Now().Format(dateLayout) {
 				status = syncengine.StatusPartial
 			}
-			if serr := state.EnsurePending(bgCtx, source, dayStr); serr == nil {
-				_ = state.SetStatus(bgCtx, source, dayStr, status)
-			}
+			s.recordSyncState(bgCtx, state, source, dayStr, status)
 		}
-		return syncResult{hasData, err}
+		return daySyncResult{hasData, err}
 	}
 
-	done := make(chan syncResult, 1)
+	done := make(chan daySyncResult, 1)
 	go func() {
 		defer s.syncingDays.Delete(syncKey)
 		bgCtx := context.Background()
 		state := &syncengine.SQLStore{DB: s.DB, UserID: userID}
 
 		var wg sync.WaitGroup
-		var googleRes syncResult
+		var googleRes daySyncResult
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			googleRes = runSource(bgCtx, googleHealthSource, googleSync, state)
 		}()
 
-		var cronoRes syncResult
+		var cronoRes daySyncResult
 		cronometerSync := s.userCronometerSyncer(userID)
 		cronoConnected := cronometerSync != nil
 		if cronoConnected {
@@ -359,14 +392,95 @@ func (s *Server) handleForceSync(c echo.Context) error {
 		}
 		wg.Wait()
 
-		// Cronometer failing is reported (stderr) but never blocks the
-		// button on Google Health's own result — same non-fatal posture
-		// internal/cli/sync.go already takes for the scheduled pass.
-		if cronoConnected && cronoRes.err != nil {
-			fmt.Fprintln(os.Stderr, "cronometer sync error:", cronoRes.err)
+		if googleRes.err != nil {
+			s.Logger.Error("manual sync failed", zap.Int64("user_id", userID), zap.String("day", dayStr),
+				zap.String("source", googleHealthSource),
+				zap.Bool("auth_expired", googleauth.IsInvalidGrant(googleRes.err)),
+				zap.Error(googleRes.err))
+		} else {
+			s.Logger.Info("manual sync ok", zap.Int64("user_id", userID), zap.String("day", dayStr),
+				zap.String("source", googleHealthSource), zap.Bool("has_data", googleRes.hasData))
+		}
+		if cronoConnected {
+			// Was fmt.Fprintln(os.Stderr, ...) — invisible once hosted as
+			// an OS service, same class of bug as the sync scheduler's own
+			// stderr-only error reporting (see
+			// internal/cli/googlehealthsync.go).
+			if cronoRes.err != nil {
+				s.Logger.Error("manual sync failed", zap.Int64("user_id", userID), zap.String("day", dayStr),
+					zap.String("source", cronometerSource), zap.Error(cronoRes.err))
+			} else {
+				s.Logger.Info("manual sync ok", zap.Int64("user_id", userID), zap.String("day", dayStr),
+					zap.String("source", cronometerSource), zap.Bool("has_data", cronoRes.hasData))
+			}
 		}
 		done <- googleRes
 	}()
+	return done, true
+}
+
+// dayNeedsAutoSync reports whether day has never actually been resolved
+// for userID's Google Health sync — no sync_state row at all, or one stuck
+// pending/partial — meaning an empty dashboard for it might just mean
+// "nobody's synced this day yet", not "genuinely nothing happened that
+// day". Drives handleView's auto-sync-on-first-view (see its own doc
+// comment). Never true for today (still expected to be in progress, and
+// already gets picked up by the ordinary scheduler) or when this account
+// hasn't connected Google Health at all.
+func (s *Server) dayNeedsAutoSync(ctx context.Context, userID int64, dayStr string) bool {
+	if dayStr == time.Now().Format(dateLayout) {
+		return false
+	}
+	if s.userGoogleSyncer(userID) == nil {
+		return false
+	}
+	state := &syncengine.SQLStore{DB: s.DB, UserID: userID}
+	existing, ok, err := state.Status(ctx, googleHealthSource, dayStr)
+	if err != nil {
+		return false
+	}
+	if !ok {
+		return true
+	}
+	return existing == syncengine.StatusPending || existing == syncengine.StatusPartial
+}
+
+// handleForceSync answers the dashboard's "Sync" button: an on-demand,
+// unconditional sync of one day's data from every connected source — the
+// manual override to the day-completeness engine's normal pending/
+// partial-only automatic sync (internal/syncengine), useful both for
+// filling in a day the automatic pass gave up on and for testing without
+// waiting for the cron schedule. See syncDayAllSources for how the actual
+// sync runs (backgrounded, both sources concurrently, deduplicated per
+// (user, day)); this handler is just the SSE choreography around it —
+// morph the button into a spinner immediately, then morph the full view
+// back in once the sync actually finishes.
+func (s *Server) handleForceSync(c echo.Context) error {
+	reqCtx := c.Request().Context()
+	day := parseDay(c)
+	dayStr := day.Format(dateLayout)
+	view := c.QueryParam("view")
+	if view != "journal" {
+		view = "data"
+	}
+	userID := webauth.CurrentUserID(c)
+
+	sse := datastar.NewSSE(c.Response(), c.Request())
+
+	done, started := s.syncDayAllSources(userID, day, dayStr)
+	if !started {
+		if s.userGoogleSyncer(userID) == nil {
+			return sse.PatchElementTempl(views.ErrorFragment(`Google Health isn't authorized yet — connect it from the onboarding/account page first.`))
+		}
+		// A sync for this (user, day) is already in flight (e.g. a
+		// duplicate click) — just re-show the spinner rather than starting
+		// a second concurrent one.
+		return sse.PatchElementTempl(views.SyncButton(dayStr, view, true))
+	}
+
+	if err := sse.PatchElementTempl(views.SyncButton(dayStr, view, true)); err != nil {
+		return err
+	}
 
 	select {
 	case res := <-done:
