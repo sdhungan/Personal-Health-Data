@@ -54,6 +54,15 @@ func newTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("opening sqlite: %v", err)
 	}
+	// Matches internal/db.Store's own real-world setting (see its
+	// SetMaxOpenConns(1) comment) — without it, a plain :memory: database
+	// is per-connection, so database/sql's pool opening a second
+	// connection to serve a concurrent query (now that SyncDay fans out
+	// its independent fetches — see sync.go) would silently hand that
+	// goroutine a completely separate, schema-less in-memory database
+	// instead of an error, rather than queuing for the one real connection
+	// the way the production file-backed DB does.
+	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
 	if _, err := db.Exec(dbpkg.Schema); err != nil {
 		t.Fatalf("applying schema: %v", err)

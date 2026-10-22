@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/sdhungan/Personal-Health-Data/internal/healthdata"
 )
 
@@ -25,6 +27,7 @@ const dateLayout = "2006-01-02"
 //   - swim-lengths-data (see datatypes.go) is listed for DumpToday to
 //     capture but not synced — its field shape has never been confirmed
 //     against a real response.
+//
 // DBSyncer syncs one user's Google Health data. UserID scopes every write
 // this syncer makes — one DBSyncer is constructed per user per sync pass
 // (see internal/cli's scheduler fan-out), never shared across users.
@@ -44,111 +47,104 @@ type DBSyncer struct {
 // fetch that populates their sample table, not a second API call).
 func (s *DBSyncer) SyncDay(ctx context.Context, day time.Time) (bool, error) {
 	dayStr := dayKey(day)
-	hasData := false
 
-	summary, summaryHasData, err := s.fetchDailySummary(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("fetching daily summary for %s: %w", dayStr, err)
+	// Phase 1: fetchDailySummary (itself fanned out internally — see its
+	// own doc comment) plus every other step that folds a result into the
+	// same watch_daily_summary row, run concurrently rather than one after
+	// another — nothing here depends on anything else in this phase, only
+	// on all of them finishing before the one combined upsert below.
+	var (
+		summary                            healthdata.DailySummary
+		summaryHasData, activeMinutesFound bool
+		activeMinutesTotal                 *int64
+		azmFound, activityLevelFound       bool
+		hrFound                            bool
+		hrMin, hrMax, hrAvg                *float64
+		bgFound                            bool
+		bgAvg, bgMin, bgMax                *float64
+		cbtFound                           bool
+		cbtAvg, cbtMin, cbtMax             *float64
+	)
+	g1, gctx1 := errgroup.WithContext(ctx)
+	g1.Go(func() (err error) {
+		summary, summaryHasData, err = s.fetchDailySummary(gctx1, day)
+		return err
+	})
+	g1.Go(func() (err error) {
+		activeMinutesFound, activeMinutesTotal, err = s.syncActiveMinutesByLevel(gctx1, day)
+		return err
+	})
+	g1.Go(func() (err error) {
+		azmFound, err = s.syncActiveZoneMinutesByZone(gctx1, day)
+		return err
+	})
+	g1.Go(func() (err error) {
+		activityLevelFound, err = s.syncActivityLevelSegments(gctx1, day)
+		return err
+	})
+	g1.Go(func() (err error) {
+		hrFound, hrMin, hrMax, hrAvg, err = s.syncHeartRateIntraday(gctx1, day)
+		return err
+	})
+	g1.Go(func() (err error) {
+		bgFound, bgAvg, bgMin, bgMax, err = s.syncBloodGlucose(gctx1, day)
+		return err
+	})
+	g1.Go(func() (err error) {
+		cbtFound, cbtAvg, cbtMin, cbtMax, err = s.syncCoreBodyTemperature(gctx1, day)
+		return err
+	})
+	if err := g1.Wait(); err != nil {
+		return false, fmt.Errorf("syncing %s: %w", dayStr, err)
 	}
-	hasData = hasData || summaryHasData
 
-	activeMinutesFound, total, err := s.syncActiveMinutesByLevel(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing active minutes by level for %s: %w", dayStr, err)
-	}
-	hasData = hasData || activeMinutesFound
-	summary.ActiveMinutesTotal = total
-
-	azmFound, err := s.syncActiveZoneMinutesByZone(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing active zone minutes by zone for %s: %w", dayStr, err)
-	}
-	hasData = hasData || azmFound
-
-	activityLevelFound, err := s.syncActivityLevelSegments(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing activity level segments for %s: %w", dayStr, err)
-	}
-	hasData = hasData || activityLevelFound
-
-	hrFound, hrMin, hrMax, hrAvg, err := s.syncHeartRateIntraday(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing intraday heart rate for %s: %w", dayStr, err)
-	}
-	hasData = hasData || hrFound
+	hasData := summaryHasData || activeMinutesFound || azmFound || activityLevelFound || hrFound || bgFound || cbtFound
+	summary.ActiveMinutesTotal = activeMinutesTotal
 	summary.HeartRateMinBpm, summary.HeartRateMaxBpm, summary.HeartRateAvgBpm = hrMin, hrMax, hrAvg
-
-	bgFound, bgAvg, bgMin, bgMax, err := s.syncBloodGlucose(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing blood glucose for %s: %w", dayStr, err)
-	}
-	hasData = hasData || bgFound
 	summary.BloodGlucoseAvgMgDl, summary.BloodGlucoseMinMgDl, summary.BloodGlucoseMaxMgDl = bgAvg, bgMin, bgMax
-
-	cbtFound, cbtAvg, cbtMin, cbtMax, err := s.syncCoreBodyTemperature(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing core body temperature for %s: %w", dayStr, err)
-	}
-	hasData = hasData || cbtFound
 	summary.CoreBodyTemperatureAvgC, summary.CoreBodyTemperatureMinC, summary.CoreBodyTemperatureMaxC = cbtAvg, cbtMin, cbtMax
 
 	if err := s.upsertDailySummary(ctx, summary); err != nil {
 		return false, fmt.Errorf("upserting daily summary for %s: %w", dayStr, err)
 	}
 
-	sleepFound, err := s.syncSleep(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing sleep for %s: %w", dayStr, err)
+	// Phase 2: everything else, each writing to its own table independent
+	// of phase 1 and of each other — except syncRespiratoryRateSleepSummary,
+	// which looks up the sleep session syncSleep just wrote (by day/time
+	// overlap) and UPDATEs it: a real data dependency, not just the
+	// sequential list's incidental ordering it was hiding behind before
+	// (confirmed the hard way — a flaky test failure during this refactor,
+	// from it running before syncSleep's insert was visible, finding no
+	// session to attach to, and silently dropping that day's respiratory
+	// data). Chained within its own single goroutine below so the rest of
+	// phase 2 still doesn't wait on either of them.
+	var (
+		sleepFound, exerciseFound, ecgFound, bodyFound, stepsFound bool
+		zoneDefsFound, zoneMinutesFound, caloriesByZoneFound       bool
+		respRateSleepFound                                         bool
+	)
+	g2, gctx2 := errgroup.WithContext(ctx)
+	g2.Go(func() error {
+		var err error
+		sleepFound, err = s.syncSleep(gctx2, day)
+		if err != nil {
+			return err
+		}
+		respRateSleepFound, err = s.syncRespiratoryRateSleepSummary(gctx2, day)
+		return err
+	})
+	g2.Go(func() (err error) { exerciseFound, err = s.syncExercise(gctx2, day); return err })
+	g2.Go(func() (err error) { ecgFound, err = s.syncECG(gctx2, day); return err })
+	g2.Go(func() (err error) { bodyFound, err = s.syncBodyMeasurement(gctx2, day); return err })
+	g2.Go(func() (err error) { stepsFound, err = s.syncStepsHourly(gctx2, day); return err })
+	g2.Go(func() (err error) { zoneDefsFound, err = s.syncHeartRateZoneDefinitions(gctx2, day); return err })
+	g2.Go(func() (err error) { zoneMinutesFound, err = s.syncHeartRateZoneMinutes(gctx2, day); return err })
+	g2.Go(func() (err error) { caloriesByZoneFound, err = s.syncCaloriesByZone(gctx2, day); return err })
+	if err := g2.Wait(); err != nil {
+		return false, fmt.Errorf("syncing %s: %w", dayStr, err)
 	}
-	hasData = hasData || sleepFound
-
-	exerciseFound, err := s.syncExercise(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing exercise for %s: %w", dayStr, err)
-	}
-	hasData = hasData || exerciseFound
-
-	ecgFound, err := s.syncECG(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing ECG for %s: %w", dayStr, err)
-	}
-	hasData = hasData || ecgFound
-
-	bodyFound, err := s.syncBodyMeasurement(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing body measurement for %s: %w", dayStr, err)
-	}
-	hasData = hasData || bodyFound
-
-	stepsFound, err := s.syncStepsHourly(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing hourly steps for %s: %w", dayStr, err)
-	}
-	hasData = hasData || stepsFound
-
-	zoneDefsFound, err := s.syncHeartRateZoneDefinitions(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing heart rate zone definitions for %s: %w", dayStr, err)
-	}
-	hasData = hasData || zoneDefsFound
-
-	zoneMinutesFound, err := s.syncHeartRateZoneMinutes(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing heart rate zone minutes for %s: %w", dayStr, err)
-	}
-	hasData = hasData || zoneMinutesFound
-
-	caloriesByZoneFound, err := s.syncCaloriesByZone(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing calories by zone for %s: %w", dayStr, err)
-	}
-	hasData = hasData || caloriesByZoneFound
-
-	respRateSleepFound, err := s.syncRespiratoryRateSleepSummary(ctx, day)
-	if err != nil {
-		return false, fmt.Errorf("syncing sleep respiratory rate for %s: %w", dayStr, err)
-	}
-	hasData = hasData || respRateSleepFound
+	hasData = hasData || sleepFound || exerciseFound || ecgFound || bodyFound || stepsFound ||
+		zoneDefsFound || zoneMinutesFound || caloriesByZoneFound || respRateSleepFound
 
 	return hasData, nil
 }
@@ -187,93 +183,185 @@ func isOnDay(t time.Time, day time.Time) bool {
 // tables, rather than a second, redundant API call.
 func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (healthdata.DailySummary, bool, error) {
 	out := healthdata.DailySummary{Day: dayKey(day)}
-	hasData := false
+
+	// Every one of the 16 data types below is fetched independently of
+	// every other — nothing here reads a value another fetch produced —
+	// so they run concurrently instead of one after another. This used to
+	// be 16 sequential Google Health API round trips, which is exactly
+	// what made a never-before-synced day (or the scheduler's own pass)
+	// take "15-20+ seconds" (see runGoogleRangeSync's doc comment in
+	// internal/web/settings.go): now bounded by whichever single call is
+	// slowest, not their sum. Each goroutine below only ever writes its
+	// own result variable, never touching another's or `out` directly —
+	// everything is folded into `out`/`hasData` sequentially, after
+	// g.Wait(), in the exact same order and with the exact same
+	// per-type logic this function always had, so a day's computed
+	// totals are unchanged, only how long they take to get here.
+	var (
+		restingHR      DailyRestingHeartRate
+		restingHRFound bool
+		hrv            DailyHeartRateVariability
+		hrvFound       bool
+		spo2           DailyOxygenSaturation
+		spo2Found      bool
+		respRate       DailyRespiratoryRate
+		respRateFound  bool
+		vo2Daily       DailyVo2Max
+		vo2DailyFound  bool
+		sleepTemp      DailySleepTemperatureDerivations
+		sleepTempFound bool
+		totalCal       TotalCaloriesRollup
+		totalCalFound  bool
+		floors         FloorsRollup
+		floorsFound    bool
+		steps          []SourcedValue[Steps]
+		distance       []Distance
+		altitude       []Altitude
+		sedentary      []SedentaryPeriod
+		activeEnergy   []ActiveEnergyBurned
+		vo2Sample      []Vo2Max
+		runVo2Sample   []RunVo2Max
+		sleeps         []Sleep
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
 
 	// ---- Daily aggregates: list() unfiltered, matched to day client-side ----
-
-	if v, found, err := fetchDailyAggregate[DailyRestingHeartRate](ctx, s.Client, "daily-resting-heart-rate", day,
-		func(v DailyRestingHeartRate) Date { return v.Date }); err != nil {
-		return out, false, err
-	} else if found {
-		bpm := float64(v.BeatsPerMinute)
-		out.RestingHeartRateBpm = &bpm
-		hasData = true
-	}
-
-	if v, found, err := fetchDailyAggregate[DailyHeartRateVariability](ctx, s.Client, "daily-heart-rate-variability", day,
-		func(v DailyHeartRateVariability) Date { return v.Date }); err != nil {
-		return out, false, err
-	} else if found {
-		ms := float64(v.AverageHeartRateVariabilityMilliseconds)
-		out.HrvAvgMs = &ms
-		hasData = true
-	}
-
-	if v, found, err := fetchDailyAggregate[DailyOxygenSaturation](ctx, s.Client, "daily-oxygen-saturation", day,
-		func(v DailyOxygenSaturation) Date { return v.Date }); err != nil {
-		return out, false, err
-	} else if found {
-		avg, lower := float64(v.AveragePercentage), float64(v.LowerBoundPercentage)
-		out.Spo2AvgPct, out.Spo2MinPct = &avg, &lower
-		hasData = true
-	}
-
-	if v, found, err := fetchDailyAggregate[DailyRespiratoryRate](ctx, s.Client, "daily-respiratory-rate", day,
-		func(v DailyRespiratoryRate) Date { return v.Date }); err != nil {
-		return out, false, err
-	} else if found {
-		bpm := float64(v.BreathsPerMinute)
-		out.RespiratoryRateAvgBpm = &bpm
-		hasData = true
-	}
-
-	if v, found, err := fetchDailyAggregate[DailyVo2Max](ctx, s.Client, "daily-vo2-max", day,
-		func(v DailyVo2Max) Date { return v.Date }); err != nil {
-		return out, false, err
-	} else if found {
-		vo2 := float64(v.Vo2Max)
-		out.Vo2Max = &vo2
-		hasData = true
-	}
-
+	g.Go(func() (err error) {
+		restingHR, restingHRFound, err = fetchDailyAggregate[DailyRestingHeartRate](gctx, s.Client, "daily-resting-heart-rate", day,
+			func(v DailyRestingHeartRate) Date { return v.Date })
+		return err
+	})
+	g.Go(func() (err error) {
+		hrv, hrvFound, err = fetchDailyAggregate[DailyHeartRateVariability](gctx, s.Client, "daily-heart-rate-variability", day,
+			func(v DailyHeartRateVariability) Date { return v.Date })
+		return err
+	})
+	g.Go(func() (err error) {
+		spo2, spo2Found, err = fetchDailyAggregate[DailyOxygenSaturation](gctx, s.Client, "daily-oxygen-saturation", day,
+			func(v DailyOxygenSaturation) Date { return v.Date })
+		return err
+	})
+	g.Go(func() (err error) {
+		respRate, respRateFound, err = fetchDailyAggregate[DailyRespiratoryRate](gctx, s.Client, "daily-respiratory-rate", day,
+			func(v DailyRespiratoryRate) Date { return v.Date })
+		return err
+	})
+	g.Go(func() (err error) {
+		vo2Daily, vo2DailyFound, err = fetchDailyAggregate[DailyVo2Max](gctx, s.Client, "daily-vo2-max", day,
+			func(v DailyVo2Max) Date { return v.Date })
+		return err
+	})
 	// daily-heart-rate-zones (zone BPM thresholds, not a time series) is
 	// synced separately into its own table — see syncHeartRateZoneDefinitions.
-	if v, found, err := fetchDailyAggregate[DailySleepTemperatureDerivations](ctx, s.Client, "daily-sleep-temperature-derivations", day,
-		func(v DailySleepTemperatureDerivations) Date { return v.Date }); err != nil {
-		return out, false, err
-	} else if found {
-		night, base, dev := float64(v.NightlyTemperatureCelsius), float64(v.BaselineTemperatureCelsius), float64(v.RelativeNightlyStddev30dCelsius)
-		out.SleepTemperatureC, out.SleepTemperatureBaselineC, out.SleepTemperatureDeviation30dC = &night, &base, &dev
-		hasData = true
-	}
+	g.Go(func() (err error) {
+		sleepTemp, sleepTempFound, err = fetchDailyAggregate[DailySleepTemperatureDerivations](gctx, s.Client, "daily-sleep-temperature-derivations", day,
+			func(v DailySleepTemperatureDerivations) Date { return v.Date })
+		return err
+	})
 
 	// ---- dailyRollUp-only types (list() rejected outright) ----
-
-	if v, found, err := fetchDailyRollup[TotalCaloriesRollup](ctx, s.Client, "total-calories", day); err != nil {
-		return out, false, err
-	} else if found {
-		kcal := float64(v.KcalSum)
-		out.KcalBurnedGoogle = &kcal
-		hasData = true
-	}
-
+	g.Go(func() (err error) {
+		totalCal, totalCalFound, err = fetchDailyRollup[TotalCaloriesRollup](gctx, s.Client, "total-calories", day)
+		return err
+	})
 	// floors' own rollup response has always come back empty for this
 	// account, so FloorsRollup's shape (values.go) is a best-effort guess,
 	// not confirmed — safe if wrong, ExtractRollupValues simply finds no
 	// points rather than silently decoding the wrong field.
-	if v, found, err := fetchDailyRollup[FloorsRollup](ctx, s.Client, "floors", day); err != nil {
+	g.Go(func() (err error) {
+		floors, floorsFound, err = fetchDailyRollup[FloorsRollup](gctx, s.Client, "floors", day)
+		return err
+	})
+
+	// ---- Interval types, filtered server-side to this day ----
+	g.Go(func() (err error) {
+		steps, err = fetchIntervalPointsWithSource[Steps](gctx, s.Client, "steps", day)
+		return err
+	})
+	g.Go(func() (err error) {
+		distance, err = fetchIntervalPoints[Distance](gctx, s.Client, "distance", day)
+		return err
+	})
+	g.Go(func() (err error) {
+		altitude, err = fetchIntervalPoints[Altitude](gctx, s.Client, "altitude", day)
+		return err
+	})
+	g.Go(func() (err error) {
+		sedentary, err = fetchIntervalPoints[SedentaryPeriod](gctx, s.Client, "sedentary-period", day)
+		return err
+	})
+	g.Go(func() (err error) {
+		activeEnergy, err = fetchIntervalPoints[ActiveEnergyBurned](gctx, s.Client, "active-energy-burned", day)
+		return err
+	})
+
+	// ---- Sample types, last-of-day (same pattern as syncBodyMeasurement's
+	// weight/height/body-fat) ----
+	g.Go(func() (err error) {
+		vo2Sample, err = fetchSamplePoints[Vo2Max](gctx, s.Client, "vo2-max", day)
+		return err
+	})
+	g.Go(func() (err error) {
+		runVo2Sample, err = fetchSamplePoints[RunVo2Max](gctx, s.Client, "run-vo2-max", day)
+		return err
+	})
+
+	// ---- Sleep duration, from the same sleep sessions synced separately ----
+	g.Go(func() (err error) {
+		sleeps, err = fetchUnfilteredForDay[Sleep](gctx, s.Client, "sleep", day, func(v Sleep) (time.Time, bool) {
+			t, err := v.Interval.Start()
+			return t, err == nil
+		})
+		return err
+	})
+
+	if err := g.Wait(); err != nil {
 		return out, false, err
-	} else if found {
-		climbed := int64(v.FloorsSum)
+	}
+
+	hasData := false
+	if restingHRFound {
+		bpm := float64(restingHR.BeatsPerMinute)
+		out.RestingHeartRateBpm = &bpm
+		hasData = true
+	}
+	if hrvFound {
+		ms := float64(hrv.AverageHeartRateVariabilityMilliseconds)
+		out.HrvAvgMs = &ms
+		hasData = true
+	}
+	if spo2Found {
+		avg, lower := float64(spo2.AveragePercentage), float64(spo2.LowerBoundPercentage)
+		out.Spo2AvgPct, out.Spo2MinPct = &avg, &lower
+		hasData = true
+	}
+	if respRateFound {
+		bpm := float64(respRate.BreathsPerMinute)
+		out.RespiratoryRateAvgBpm = &bpm
+		hasData = true
+	}
+	if vo2DailyFound {
+		vo2 := float64(vo2Daily.Vo2Max)
+		out.Vo2Max = &vo2
+		hasData = true
+	}
+	if sleepTempFound {
+		night, base, dev := float64(sleepTemp.NightlyTemperatureCelsius), float64(sleepTemp.BaselineTemperatureCelsius), float64(sleepTemp.RelativeNightlyStddev30dCelsius)
+		out.SleepTemperatureC, out.SleepTemperatureBaselineC, out.SleepTemperatureDeviation30dC = &night, &base, &dev
+		hasData = true
+	}
+	if totalCalFound {
+		kcal := float64(totalCal.KcalSum)
+		out.KcalBurnedGoogle = &kcal
+		hasData = true
+	}
+	if floorsFound {
+		climbed := int64(floors.FloorsSum)
 		out.FloorsClimbed = &climbed
 		hasData = true
 	}
-
-	// ---- Interval types, filtered server-side to this day ----
-
-	if steps, err := fetchIntervalPointsWithSource[Steps](ctx, s.Client, "steps", day); err != nil {
-		return out, false, err
-	} else if len(steps) > 0 {
+	if len(steps) > 0 {
 		var total int64
 		for _, count := range dedupedHourlySteps(steps) {
 			total += count
@@ -281,36 +369,27 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 		out.StepsTotal = &total
 		hasData = true
 	}
-
-	if dist, err := fetchIntervalPoints[Distance](ctx, s.Client, "distance", day); err != nil {
-		return out, false, err
-	} else if len(dist) > 0 {
+	if len(distance) > 0 {
 		var total int64
-		for _, p := range dist {
+		for _, p := range distance {
 			total += int64(p.Meters)
 		}
 		metersF := float64(total)
 		out.DistanceM = &metersF
 		hasData = true
 	}
-
-	if alt, err := fetchIntervalPoints[Altitude](ctx, s.Client, "altitude", day); err != nil {
-		return out, false, err
-	} else if len(alt) > 0 {
+	if len(altitude) > 0 {
 		var totalMm int64
-		for _, p := range alt {
+		for _, p := range altitude {
 			totalMm += int64(p.GainMillimeters)
 		}
 		gainM := float64(totalMm) / 1000
 		out.AltitudeGainM = &gainM
 		hasData = true
 	}
-
-	if sed, err := fetchIntervalPoints[SedentaryPeriod](ctx, s.Client, "sedentary-period", day); err != nil {
-		return out, false, err
-	} else if len(sed) > 0 {
+	if len(sedentary) > 0 {
 		var totalMinutes int64
-		for _, p := range sed {
+		for _, p := range sedentary {
 			start, errS := p.Interval.Start()
 			end, errE := p.Interval.End()
 			if errS == nil && errE == nil && end.After(start) {
@@ -320,44 +399,25 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 		out.SedentaryMinutes = &totalMinutes
 		hasData = true
 	}
-
-	if aeb, err := fetchIntervalPoints[ActiveEnergyBurned](ctx, s.Client, "active-energy-burned", day); err != nil {
-		return out, false, err
-	} else if len(aeb) > 0 {
+	if len(activeEnergy) > 0 {
 		var total float64
-		for _, p := range aeb {
+		for _, p := range activeEnergy {
 			total += float64(p.Kcal)
 		}
 		out.ActiveEnergyBurnedKcal = &total
 		hasData = true
 	}
-
-	// ---- Sample types, last-of-day (same pattern as syncBodyMeasurement's
-	// weight/height/body-fat) ----
-
-	if pts, err := fetchSamplePoints[Vo2Max](ctx, s.Client, "vo2-max", day); err != nil {
-		return out, false, err
-	} else if len(pts) > 0 {
-		v := float64(pts[len(pts)-1].Vo2MaxMillilitersPerKgPerMinute)
+	if len(vo2Sample) > 0 {
+		v := float64(vo2Sample[len(vo2Sample)-1].Vo2MaxMillilitersPerKgPerMinute)
 		out.Vo2MaxSample = &v
 		hasData = true
 	}
-
-	if pts, err := fetchSamplePoints[RunVo2Max](ctx, s.Client, "run-vo2-max", day); err != nil {
-		return out, false, err
-	} else if len(pts) > 0 {
-		v := float64(pts[len(pts)-1].MlPerKgPerMin)
+	if len(runVo2Sample) > 0 {
+		v := float64(runVo2Sample[len(runVo2Sample)-1].MlPerKgPerMin)
 		out.Vo2MaxRunSample = &v
 		hasData = true
 	}
-
-	// ---- Sleep duration, from the same sleep sessions synced separately ----
-	if sleeps, err := fetchUnfilteredForDay[Sleep](ctx, s.Client, "sleep", day, func(v Sleep) (time.Time, bool) {
-		t, err := v.Interval.Start()
-		return t, err == nil
-	}); err != nil {
-		return out, false, err
-	} else if len(sleeps) > 0 {
+	if len(sleeps) > 0 {
 		var total int64
 		for _, sess := range sleeps {
 			total += int64(sess.Summary.MinutesAsleep)
