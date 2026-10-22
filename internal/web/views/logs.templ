@@ -1,0 +1,68 @@
+package views
+
+import (
+	"net/url"
+	"strconv"
+)
+
+func logsStreamURL(offset int64) string {
+	return APIURL("logs/stream", url.Values{"offset": {strconv.FormatInt(offset, 10)}})
+}
+
+func logsClearURL() string {
+	return APIURL("logs/clear", nil)
+}
+
+// LogsPage is a standalone utility page (opened in its own tab from the
+// dashboard's user menu — see layout.templ's Header), not part of the
+// dashboard's own Datastar-morphed #view-body: it's a separate live view
+// of <root>/logs/healthd.log with its own "Clear log" action. initialContent
+// is that file's full content as of this render (see handleLogsPage); the
+// page immediately opens a live tail continuing from initialOffset (its
+// byte length) via data-init, and scrolls to the bottom on load so the
+// most recent entries are what's visible first, same as a terminal's
+// `tail -f`.
+templ LogsPage(initialContent string, initialOffset int64) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>Logs — Personal Health Dashboard</title>
+			@themeScript()
+			<link rel="stylesheet" href="/static/style.css"/>
+			<script type="module" src="/static/datastar.js"></script>
+		</head>
+		<body class="logs-page" data-init={ getExpr(logsStreamURL(initialOffset)) }>
+			<div class="logs-page-header">
+				<h1 class="brand-title">healthd.log</h1>
+				<button
+					type="button"
+					class="body-carry-btn danger-btn"
+					data-on:click={ "confirm('Clear the current log file? This cannot be undone.') && " + postExpr(logsClearURL()) }
+				>
+					@iconTrash()
+					Clear log
+				</button>
+			</div>
+			@LogContent(initialContent)
+			<script>
+				(function() {
+					var el = document.getElementById("log-content");
+					if (el) { el.scrollTop = el.scrollHeight; }
+				})();
+			</script>
+		</body>
+	</html>
+}
+
+// LogContent is its own component (stable #log-content id) so both the
+// initial page render and handleLogsClear's SSE patch (a full replace,
+// back to empty) go through the same markup — handleLogsStream's live
+// tail then appends to this same element directly via a script instead of
+// a templ patch per line (see appendLogChunkJS's doc comment for why:
+// scroll-position-aware appends aren't expressible as a plain element
+// replace).
+templ LogContent(content string) {
+	<pre id="log-content">{ content }</pre>
+}

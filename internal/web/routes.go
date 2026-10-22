@@ -35,6 +35,7 @@ func (s *Server) registerRoutes() {
 	s.echo.GET("/settings/account", s.handleAccountSettingsPage, auth)
 	s.echo.POST("/settings/account/delete", s.handleAccountDelete, auth)
 	s.echo.GET("/settings/mcp-connector", s.handleMCPConnectorPage, auth)
+	s.echo.GET("/settings/logs", s.handleLogsPage, auth)
 	s.echo.GET("/onboarding/connect", s.handleOnboardingPage, auth)
 	s.echo.POST("/onboarding/connect/google", s.handleOnboardingConnectGoogle, auth)
 	s.echo.POST("/onboarding/connect/cronometer", s.handleOnboardingConnectCronometer, auth)
@@ -51,4 +52,6 @@ func (s *Server) registerRoutes() {
 	api.POST("/body-measurement", s.handleBodyMeasurementSave)
 	api.POST("/body-measurement/carry-forward", s.handleBodyMeasurementCarryForward)
 	api.POST("/cronometer/login", s.handleCronometerLogin)
+	api.GET("/logs/stream", s.handleLogsStream)
+	api.POST("/logs/clear", s.handleLogsClear)
 }

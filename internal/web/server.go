@@ -15,6 +15,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"go.uber.org/zap"
 
 	"github.com/sdhungan/Personal-Health-Data/internal/config"
 	"github.com/sdhungan/Personal-Health-Data/internal/cronometer"
@@ -56,6 +57,15 @@ type Server struct {
 	// per-user one (see internal/paths.GoogleClientSecretFile).
 	RootKey crypto.Key
 
+	// Logger is the same structured logger runForegroundCtx builds (see
+	// internal/applog) — the only place any dashboard-triggered background
+	// work (a manual "Sync" click, a bulk sync, connecting a provider)
+	// leaves a trace once running as a hosted OS service, which has no
+	// attached console for fmt to reach. Never nil — New defaults it to
+	// zap.NewNop() so a caller that genuinely has nothing to log to (a
+	// test, say) doesn't need its own no-op boilerplate.
+	Logger *zap.Logger
+
 	// ExecutablePath is a best-effort os.Executable() result, used only to
 	// pre-fill the "healthd mcp" command snippet on /settings/mcp-connector
 	// (see mcp_connector.go) — an empty value just means that page falls
@@ -82,6 +92,7 @@ type Server struct {
 	// WAL mode (internal/db.Store) already keeps reads for other days (or
 	// other users) from blocking on each other.
 	syncingDays sync.Map // "userID/day" string -> struct{}
+
 }
 
 // New builds the Echo app and registers every route. store is used for the
@@ -91,7 +102,7 @@ type Server struct {
 // demand (see googleSyncers/cronoSyncers above) — nothing is pre-loaded at
 // startup, since which users exist and which providers they've connected
 // can change at any time via the dashboard's own signup/onboarding flow.
-func New(store *db.Store, p *paths.Paths, cfg *config.Config, rootKey crypto.Key) *Server {
+func New(store *db.Store, p *paths.Paths, cfg *config.Config, rootKey crypto.Key, logger *zap.Logger) *Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -103,8 +114,13 @@ func New(store *db.Store, p *paths.Paths, cfg *config.Config, rootKey crypto.Key
 
 	exePath, _ := os.Executable() // best-effort; see ExecutablePath's doc comment
 
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
 	s := &Server{
 		echo: e, store: store, DB: store.DB(), Paths: p, Config: cfg, RootKey: rootKey,
+		Logger:         logger,
 		ExecutablePath: exePath,
 		googleSyncers:  map[int64]*googlehealth.DBSyncer{},
 		cronoSyncers:   map[int64]*cronometer.DBSyncer{},
@@ -258,8 +274,15 @@ loop:
 			runErr = err
 			break loop
 		case <-ticker.C:
+			// Was fmt.Println(...) — invisible once hosted as an OS
+			// service (no attached console), same class of bug as the
+			// sync scheduler's own stderr-only error reporting (see
+			// internal/cli/googlehealthsync.go) — and a checkpoint
+			// failure is a genuinely serious one to lose: it means the
+			// encrypted on-disk backup has silently stopped being
+			// updated, so a crash loses more than the usual few minutes.
 			if err := s.store.Checkpoint(); err != nil {
-				fmt.Println("warning: checkpointing database:", err)
+				s.Logger.Error("checkpointing database failed", zap.Error(err))
 			}
 			// Opportunistic, not on its own goroutine/timer — piggybacking
 			// on the checkpoint tick is enough to keep web_session from
@@ -267,7 +290,7 @@ loop:
 			// already-rejected expired session is harmless (see
 			// webauth.LookupSession, which refuses expired rows itself).
 			if err := webauth.CleanupExpired(ctx, s.DB); err != nil {
-				fmt.Println("warning: cleaning up expired sessions:", err)
+				s.Logger.Error("cleaning up expired sessions failed", zap.Error(err))
 			}
 		case <-ctx.Done():
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

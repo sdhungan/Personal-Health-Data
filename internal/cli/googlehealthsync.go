@@ -3,10 +3,13 @@ package cli
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/sdhungan/Personal-Health-Data/internal/config"
 	"github.com/sdhungan/Personal-Health-Data/internal/crypto"
@@ -30,7 +33,10 @@ import (
 // process-lifetime connection (the merged process's one *db.Store) must
 // never be closed out from under itself by a function that thinks it owns
 // it (see the incident noted on internal/db.Store's removeWorkingFile).
-func runGoogleHealthSyncOnce(ctx context.Context, conn *sql.DB) error {
+// logger is never nil (see web.Server.Logger's doc comment on the same
+// default) — "healthd sync"'s own one-shot call site passes zap.NewNop(),
+// since that command already prints directly to its own stderr/stdout.
+func runGoogleHealthSyncOnce(ctx context.Context, conn *sql.DB, logger *zap.Logger) error {
 	cfg, err := config.Load(appPaths.ConfigFile())
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -53,10 +59,22 @@ func runGoogleHealthSyncOnce(ctx context.Context, conn *sql.DB) error {
 	// message instead of repeating the same failure per user.
 	clientJSON, err := googleauth.LoadClientJSON(appPaths.GoogleClientSecretFile(), rootKey)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "google_health sync skipped:", err)
+		logger.Warn("google_health sync skipped: no OAuth client configured yet", zap.Error(err))
 		return nil
 	}
 
+	// Per-user failures are collected and returned (not just logged here),
+	// so the aggregate still reaches the one caller that decides what
+	// "the whole pass failed" means (service.go's runSync logs it;
+	// "healthd sync" exits non-zero on it) — but each user's own
+	// success/failure is also logged right here, at the point it's known,
+	// with enough detail (which user, how long, invalid_grant or not) to
+	// actually tell what the scheduler did on a given tick instead of
+	// inferring it from a single pass/fail error string.
+	var (
+		mu   sync.Mutex
+		errs []error
+	)
 	var wg sync.WaitGroup
 	for _, userID := range userIDs {
 		tokenPath := appPaths.UserGoogleOAuthFile(userID)
@@ -67,15 +85,23 @@ func runGoogleHealthSyncOnce(ctx context.Context, conn *sql.DB) error {
 		wg.Add(1)
 		go func(userID int64) {
 			defer wg.Done()
+			start := time.Now()
 			if err := syncGoogleHealthForUser(ctx, conn, cfg, clientJSON, userID, tokenPath); err != nil {
-				fmt.Fprintf(os.Stderr, "google_health sync error (user %d): %v\n", userID, err)
+				logger.Error("google_health sync failed",
+					zap.Int64("user_id", userID),
+					zap.Bool("auth_expired", googleauth.IsInvalidGrant(err)),
+					zap.Error(err))
+				mu.Lock()
+				errs = append(errs, fmt.Errorf("user %d: %w", userID, err))
+				mu.Unlock()
+				return
 			}
+			logger.Info("google_health sync ok", zap.Int64("user_id", userID), zap.Duration("elapsed", time.Since(start)))
 		}(userID)
 	}
 	wg.Wait()
 
-	fmt.Println("google_health sync complete")
-	return nil
+	return errors.Join(errs...)
 }
 
 func syncGoogleHealthForUser(ctx context.Context, conn *sql.DB, cfg *config.Config, clientJSON []byte, userID int64, tokenPath string) error {

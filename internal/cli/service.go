@@ -225,6 +225,19 @@ func runForegroundCtx(ctx context.Context, googleClientSecretPath string) error 
 			zap.String("path", googleClientSecretPath))
 	}
 
+	// db.Open itself only ever reports an unclean-shutdown recovery via
+	// fmt.Fprintf(os.Stderr, ...) (correct for its other seven call sites —
+	// all interactive CLI commands with an attached terminal), which is
+	// invisible here, same class of bug as everywhere else in this file —
+	// and an operator finding out "last run crashed/was killed" only by
+	// reading this file directly defeats half the point of having it.
+	// Checked independently rather than widening db.Open's own signature
+	// for the one caller that needs it logged.
+	if _, statErr := os.Stat(appPaths.DBWorkingFile()); statErr == nil {
+		logger.Warn("found an existing working database file — healthd did not shut down cleanly last time; recovering from it instead of the last encrypted checkpoint",
+			zap.String("path", appPaths.DBWorkingFile()))
+	}
+
 	store, err := db.Open(appPaths.DBFile(), appPaths.DBWorkingFile(), key)
 	if err != nil {
 		logger.Error("opening database failed", zap.Error(err))
@@ -237,15 +250,27 @@ func runForegroundCtx(ctx context.Context, googleClientSecretPath string) error 
 	// googleSyncers/cronoSyncers cache) — nothing to pre-load here. key is
 	// also handed to the server as its RootKey, to decrypt the one
 	// app-wide Google OAuth client JSON uploaded via /settings/google-client.
-	srv := web.New(store, appPaths, cfg, key)
+	srv := web.New(store, appPaths, cfg, key, logger)
 
 	runSync := func() {
-		if err := runGoogleHealthSyncOnce(ctx, store.DB()); err != nil {
-			logger.Error("google_health sync error", zap.Error(err))
+		start := time.Now()
+		googleErr := runGoogleHealthSyncOnce(ctx, store.DB(), logger)
+		if googleErr != nil {
+			logger.Error("google_health sync error", zap.Error(googleErr))
 		}
-		if err := runCronometerSyncOnce(ctx, store.DB()); err != nil {
-			logger.Error("cronometer sync error", zap.Error(err))
+		cronoErr := runCronometerSyncOnce(ctx, store.DB(), logger)
+		if cronoErr != nil {
+			logger.Error("cronometer sync error", zap.Error(cronoErr))
 		}
+		// One line per tick regardless of outcome — the heartbeat that
+		// was missing before: previously a failed scheduled sync (or one
+		// that just never ran) left zero trace in this log at all (see
+		// googlehealthsync.go/cronometersync.go's now-fixed stderr-only
+		// error reporting, invisible under a hosted OS service).
+		logger.Info("sync pass complete",
+			zap.Duration("elapsed", time.Since(start)),
+			zap.Bool("google_health_ok", googleErr == nil),
+			zap.Bool("cronometer_ok", cronoErr == nil))
 	}
 	schedulerDone := make(chan struct{})
 	go func() {

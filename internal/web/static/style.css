@@ -571,6 +571,12 @@ body {
 .body-carry-btn:hover { color: var(--text); background: var(--tile-bg-hover); }
 .body-saved-status { color: var(--text-dim); font-size: 0.8rem; }
 
+/* .auth-page already has its own (equally-specific) override below for
+   its own buttons; this is the standalone version for buttons outside
+   that wrapper, e.g. the log viewer's Clear button. */
+.danger-btn { color: var(--danger); border-color: var(--danger); }
+.danger-btn:hover { background: var(--danger); color: #fff; }
+
 /* ---- Activity detail overlay ---- */
 
 .overlay {
@@ -724,4 +730,35 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
   overflow-x: auto;
+}
+
+/* ---- Log viewer (/settings/logs) — its own standalone tab, not part of
+   the dashboard shell, so it gets a full-height layout instead of
+   .auth-page's centered/narrow one. */
+.logs-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  margin: 0;
+}
+.logs-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.logs-page-header .brand-title { font-size: 1.1rem; margin: 0; }
+#log-content {
+  flex: 1;
+  margin: 0;
+  padding: 16px 20px;
+  overflow-y: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }

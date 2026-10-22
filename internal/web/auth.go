@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 
 	"github.com/sdhungan/Personal-Health-Data/internal/cronometer"
@@ -165,12 +165,19 @@ func (s *Server) startGoogleConnect(userID int64, successPath string) (authURL s
 	go func() {
 		token, err := flow.Wait(context.Background())
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "connecting Google Health failed for user %d: %v\n", userID, err)
+			// Was fmt.Fprintf(os.Stderr, ...) — invisible once hosted as
+			// an OS service (no attached console), same class of bug as
+			// the sync scheduler's own stderr-only error reporting (see
+			// internal/cli/googlehealthsync.go) — a failed consent
+			// exchange used to leave zero trace anywhere.
+			s.Logger.Error("Google Health consent flow failed", zap.Int64("user_id", userID), zap.Error(err))
 			return
 		}
 		if err := s.finishGoogleConnect(userID, token); err != nil {
-			fmt.Fprintf(os.Stderr, "saving Google Health token failed for user %d: %v\n", userID, err)
+			s.Logger.Error("saving Google Health token failed", zap.Int64("user_id", userID), zap.Error(err))
+			return
 		}
+		s.Logger.Info("Google Health connected", zap.Int64("user_id", userID))
 	}()
 
 	return flow.AuthURL, nil
@@ -222,8 +229,18 @@ func (s *Server) handleOnboardingConnectCronometer(c echo.Context) error {
 // connectCronometer holds the verify-then-save-then-activate logic shared
 // by handleOnboardingConnectCronometer (plain redirect) and
 // handleCronometerLogin (SSE, the dashboard's ongoing account-settings
-// card) — only their response mechanism differs.
-func (s *Server) connectCronometer(ctx context.Context, userID int64, username, password string) error {
+// card) — only their response mechanism differs. Logged once here, not at
+// each of those two call sites — same "fix/instrument the shared function,
+// not every caller" reasoning as this codebase's own bug-fix discipline.
+func (s *Server) connectCronometer(ctx context.Context, userID int64, username, password string) (err error) {
+	defer func() {
+		if err != nil {
+			s.Logger.Error("cronometer connect failed", zap.Int64("user_id", userID), zap.Error(err))
+		} else {
+			s.Logger.Info("cronometer connected", zap.Int64("user_id", userID))
+		}
+	}()
+
 	if username == "" || password == "" {
 		return errors.New("email and password are required")
 	}

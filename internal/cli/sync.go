@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 
 	"github.com/sdhungan/Personal-Health-Data/internal/config"
 	"github.com/sdhungan/Personal-Health-Data/internal/crypto"
@@ -42,14 +43,21 @@ func newSyncCmd() *cobra.Command {
 				}
 			}()
 
-			if err := runGoogleHealthSyncOnce(ctx, store.DB()); err != nil {
+			// zap.NewNop(): this is the interactive one-shot command, not
+			// the hosted service — it already prints directly to its own
+			// stderr/stdout below, which a person running it from a
+			// terminal can see right away, so there's no separate log
+			// file to also write to (see web.Server.Logger's doc comment
+			// on the same default).
+			noLog := zap.NewNop()
+			if err := runGoogleHealthSyncOnce(ctx, store.DB(), noLog); err != nil {
 				return err
 			}
 			// Cronometer is deliberately independent of Google Health (see
 			// schema.sql) — a failure here (e.g. "healthd auth cronometer"
 			// never run) is logged, not fatal, so it never blocks the
 			// Google Health pass that already succeeded above.
-			if err := runCronometerSyncOnce(ctx, store.DB()); err != nil {
+			if err := runCronometerSyncOnce(ctx, store.DB(), noLog); err != nil {
 				fmt.Fprintln(os.Stderr, "cronometer sync error:", err)
 			}
 			return nil

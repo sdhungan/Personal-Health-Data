@@ -3,10 +3,13 @@ package cli
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/sdhungan/Personal-Health-Data/internal/cronometer"
 	"github.com/sdhungan/Personal-Health-Data/internal/syncengine"
@@ -23,12 +26,20 @@ import (
 // package already does in sync.go/service.go. conn is always the caller's
 // own already-open database connection — see runGoogleHealthSyncOnce's doc
 // comment for why this function never opens (or closes) one itself.
-func runCronometerSyncOnce(ctx context.Context, conn *sql.DB) error {
+// logger is never nil — see runGoogleHealthSyncOnce's doc comment on the
+// same default/one-shot-CLI exception.
+func runCronometerSyncOnce(ctx context.Context, conn *sql.DB, logger *zap.Logger) error {
 	userIDs, err := allUserIDs(ctx, conn)
 	if err != nil {
 		return fmt.Errorf("listing users: %w", err)
 	}
 
+	// Collected and returned, and also logged per-user right here — same
+	// reasoning as runGoogleHealthSyncOnce's own comment on this loop.
+	var (
+		mu   sync.Mutex
+		errs []error
+	)
 	var wg sync.WaitGroup
 	for _, userID := range userIDs {
 		credPath := appPaths.UserCronometerCredentialsFile(userID)
@@ -39,15 +50,20 @@ func runCronometerSyncOnce(ctx context.Context, conn *sql.DB) error {
 		wg.Add(1)
 		go func(userID int64) {
 			defer wg.Done()
+			start := time.Now()
 			if err := syncCronometerForUser(ctx, conn, userID, credPath); err != nil {
-				fmt.Fprintf(os.Stderr, "cronometer sync error (user %d): %v\n", userID, err)
+				logger.Error("cronometer sync failed", zap.Int64("user_id", userID), zap.Error(err))
+				mu.Lock()
+				errs = append(errs, fmt.Errorf("user %d: %w", userID, err))
+				mu.Unlock()
+				return
 			}
+			logger.Info("cronometer sync ok", zap.Int64("user_id", userID), zap.Duration("elapsed", time.Since(start)))
 		}(userID)
 	}
 	wg.Wait()
 
-	fmt.Println("cronometer sync complete")
-	return nil
+	return errors.Join(errs...)
 }
 
 func syncCronometerForUser(ctx context.Context, conn *sql.DB, userID int64, credPath string) error {

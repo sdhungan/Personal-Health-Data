@@ -108,6 +108,13 @@ func (p *Paths) ServiceDir() string { return filepath.Join(p.root, "service") }
 // File accessors (see ARCHITECTURE.md §4).
 func (p *Paths) DBFile() string { return filepath.Join(p.DBDir(), "health.db.enc") }
 
+// LogFile is the active (not-yet-rotated) structured log applog.New writes
+// to — see that package's own doc comment for the rotation policy. Kept
+// here rather than re-joined ad hoc by every caller that just wants to
+// read it (e.g. the dashboard's live log viewer), per this package's own
+// "only place that builds a path under --root" role.
+func (p *Paths) LogFile() string { return filepath.Join(p.LogsDir(), "healthd.log") }
+
 // DBWorkingFile is the plaintext SQLite file healthd decrypts health.db.enc
 // into for the duration of a run (see internal/db.Store) and re-encrypts on
 // checkpoint/close. It lives inside the same owner-only db/ directory. Its
