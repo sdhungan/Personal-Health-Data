@@ -107,12 +107,29 @@ func openWorkingFile(encPath, workPath string, key crypto.Key) (*Store, error) {
 	// snapshot without blocking on a concurrent writer (e.g. a long-running
 	// sync) and vice versa — the "don't lock the DB when fetching"
 	// requirement. busy_timeout is a backstop for the moments SQLite still
-	// needs a brief exclusive lock (e.g. a WAL checkpoint): callers wait up
-	// to 5s instead of failing immediately with "database is locked".
+	// needs a brief exclusive lock (e.g. a WAL checkpoint, or another
+	// process — the CLI or "healthd mcp" — opening this same working file):
+	// callers wait up to 5s instead of failing immediately with "database
+	// is locked".
 	if _, err := conn.Exec(`PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;`); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("configuring working file %s: %w", workPath, err)
 	}
+	// SQLite only ever allows one writer at a time regardless of WAL mode;
+	// database/sql's default pool will happily open several physical
+	// connections to this same file under concurrent load (a scheduler
+	// tick, a bulk sync's day-by-day writes, an ordinary page request all
+	// racing each other), and two of *those* connections both trying to
+	// write is exactly what busy_timeout's 5s backstop above can still lose
+	// to under sustained contention (e.g. a multi-day bulk sync), surfacing
+	// as a real "database is locked" error and a failed request. Capping
+	// the pool at one connection routes every caller — reads and writes
+	// alike — through Go's own connection-checkout queue instead: a caller
+	// waits for its turn rather than racing SQLite's file lock, so
+	// in-process contention can never produce SQLITE_BUSY. Cross-process
+	// contention (this same file opened by another healthd process) still
+	// falls back to busy_timeout, unaffected by this pool's own size.
+	conn.SetMaxOpenConns(1)
 	s := &Store{encPath: encPath, workPath: workPath, key: key, conn: conn}
 	if err := s.migrate(); err != nil {
 		conn.Close()
