@@ -32,8 +32,20 @@ func chartYLabelSpans(b *strings.Builder, axisMin, axisMax float64, y func(float
 	}
 }
 
-func chartXLabelSpan(b *strings.Builder, xpct float64, label string) {
-	fmt.Fprintf(b, `<span class="chart-x-label" style="left:%.2f%%">%s</span>`, xpct, escapeSVGText(label))
+// chartXLabelSpan writes one x-axis label. ordinal is its position among
+// the chart's rendered labels: the server can't know how wide a chart will
+// be (tiles resize), so every label is sent and style.css's container
+// queries hide every 2nd (x-skip2) or every non-4th (x-skip4) one when the
+// chart is too narrow for all of them — same rule for every chart type.
+func chartXLabelSpan(b *strings.Builder, xpct float64, label string, ordinal int) {
+	class := "chart-x-label"
+	if ordinal%2 != 0 {
+		class += " x-skip2"
+	}
+	if ordinal%4 != 0 {
+		class += " x-skip4"
+	}
+	fmt.Fprintf(b, `<span class="%s" style="left:%.2f%%">%s</span>`, class, xpct, escapeSVGText(label))
 }
 
 func chartOpen(b *strings.Builder, id string) {
@@ -110,9 +122,11 @@ func renderBarChartSVG(c ChartData, id string) string {
 	b.WriteString(`</svg>`)
 
 	chartYLabelSpans(&b, axisMin, axisMax, y)
+	k := 0
 	for i, label := range c.Labels {
 		if label != "" {
-			chartXLabelSpan(&b, (float64(i)+0.5)*slot, label)
+			chartXLabelSpan(&b, (float64(i)+0.5)*slot, label, k)
+			k++
 		}
 	}
 	if c.Goal != nil {
@@ -193,8 +207,8 @@ func renderLineChartSVG(samples []HRSample, id, unit string) string {
 	chartYLabelSpans(&b, minV, maxV, y)
 	// Up to 5 evenly spaced time labels rather than one per sample (which
 	// for a few hundred intraday points would be illegible).
-	for i := 0; i < n; i += max(n/5, 1) {
-		chartXLabelSpan(&b, x(i), samples[i].TimeLabel)
+	for i, k := 0, 0; i < n; i, k = i+max(n/5, 1), k+1 {
+		chartXLabelSpan(&b, x(i), samples[i].TimeLabel, k)
 	}
 	chartClose(&b, id)
 	return b.String()
@@ -406,15 +420,12 @@ func renderHypnogramSVG(stages []StageSegment, start, end time.Time, id string) 
 	for _, l := range hypnogramLanes {
 		fmt.Fprintf(&b, `<span class="chart-y-label" style="top:%.2f%%">%s</span>`, l.Y, l.Type)
 	}
-	// Clock ticks on the hour (every 2 hours for long sessions), like
-	// Fitbit's axis.
+	// A tick on every hour; narrow charts thin them out (chartXLabelSpan).
 	span := end.Sub(start)
-	step := time.Hour
-	if span > 10*time.Hour {
-		step = 2 * time.Hour
-	}
-	for t := start.Local().Truncate(time.Hour).Add(time.Hour); t.Before(end); t = t.Add(step) {
-		chartXLabelSpan(&b, float64(t.Sub(start))/float64(span)*100, t.Format("3:04"))
+	k := 0
+	for t := start.Local().Truncate(time.Hour).Add(time.Hour); t.Before(end); t = t.Add(time.Hour) {
+		chartXLabelSpan(&b, float64(t.Sub(start))/float64(span)*100, t.Format("3:04"), k)
+		k++
 	}
 	chartClose(&b, id)
 	return b.String()

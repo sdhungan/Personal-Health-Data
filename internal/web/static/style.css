@@ -418,10 +418,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   margin-bottom: 10px;
 }
 .tile-header[draggable="true"] { cursor: grab; }
-.tile-header-left { display: flex; align-items: center; gap: 8px; }
+.tile-header-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .tile-header-actions { display: flex; align-items: center; gap: 2px; }
 .tile-icon-badge {
   display: flex;
@@ -434,7 +435,7 @@ body {
   background: color-mix(in srgb, var(--tile-accent, var(--text-dim)) 16%, transparent);
   flex-shrink: 0;
 }
-.tile-title { font-weight: 600; font-size: 0.95rem; }
+.tile-title { font-weight: 600; font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tile-expand-btn, .tile-collapse-btn {
   background: none;
   border: none;
@@ -475,14 +476,16 @@ body {
 }
 .tile:hover .tile-resize-xy::after { opacity: 1; }
 body.tile-resizing { user-select: none; }
-/* A user-set height can be shorter than a list/form tile's content; charts
-   rescale instead, and must not clip their hover tooltips. */
-.tile[style*="height"] .tile-body { min-height: 0; }
-.tile[style*="height"] .tile-body:not(:has(.chart-wrap)) { overflow: auto; }
+/* Fit rule for every tile: content never draws outside its tile. A
+   user-set height is a min-height (tile-resize.js), so a tile is never
+   shorter than its content and charts (flex: 1) absorb any extra; content
+   is centered only while it fits ("safe" — otherwise a centered column
+   overflows upward, over the header); and rows of values wrap whole
+   instead of squeezing into each other. */
 
-.tile-body { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+.tile-body { flex: 1; display: flex; flex-direction: column; justify-content: safe center; min-width: 0; }
 
-.tile-value-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tile-value-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .tile-big-value { font-size: 2rem; font-weight: 700; }
 .tile-unit { font-size: 1rem; font-weight: 400; color: var(--text-dim); }
 .tile-subtext { color: var(--text-dim); font-size: 0.85rem; margin-top: 6px; }
@@ -510,7 +513,11 @@ body.tile-resizing { user-select: none; }
   display: flex;
   min-height: 150px;
   padding: 8px 8px 20px 40px;
+  /* Size container for x-label thinning (chart.go's chartXLabelSpan). */
+  container: chart / inline-size;
 }
+@container chart (max-width: 540px) { .chart-x-label.x-skip2 { display: none; } }
+@container chart (max-width: 280px) { .chart-x-label.x-skip4 { display: none; } }
 .chart-plot {
   position: relative;
   flex: 1;
@@ -583,11 +590,12 @@ body.tile-resizing { user-select: none; }
 
 .detail-stats-row {
   display: flex;
-  gap: 20px;
+  flex-wrap: wrap;
+  gap: 6px 20px;
   margin-bottom: 10px;
 }
 .detail-stat { display: flex; flex-direction: column; }
-.detail-stat-value { font-size: 1.2rem; font-weight: 700; }
+.detail-stat-value { font-size: 1.2rem; font-weight: 700; white-space: nowrap; }
 .detail-stat-label { color: var(--text-dim); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; }
 
 .chart-wrap.stage-wrap { flex: none; display: block; min-height: 0; padding: 0; }

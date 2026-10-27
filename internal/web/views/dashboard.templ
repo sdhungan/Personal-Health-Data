@@ -187,7 +187,7 @@ templ Tile(t TileData, day string) {
 		data-on:dragover={ tileDragOverExpr(tileGroup(t)) }
 		data-on:drop={ tileDropExpr(t.Metric, tileGroup(t)) }
 		if t.Expanded && t.Height > 0 {
-			style={ fmt.Sprintf("height: %dpx", t.Height) }
+			style={ fmt.Sprintf("min-height: %dpx", t.Height) }
 		}
 		if tileResizable(t) {
 			data-resize-url={ tileResizeURL(t.Metric) }
