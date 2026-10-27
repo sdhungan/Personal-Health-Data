@@ -3,8 +3,10 @@ package googlehealth
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/sdhungan/Personal-Health-Data/internal/healthdata"
@@ -86,19 +88,37 @@ func (s *DBSyncer) syncSleep(ctx context.Context, day time.Time) (bool, error) {
 
 // syncExercise upserts every workout starting on day into
 // watch_exercise_session.
+//
+// Unlike fetchUnfilteredForDay, this keeps each point's name: its last
+// segment is the id exportExerciseTcx needs to fetch the GPS route.
 func (s *DBSyncer) syncExercise(ctx context.Context, day time.Time) (bool, error) {
-	sessions, err := fetchUnfilteredForDay[Exercise](ctx, s.Client, "exercise", day, func(v Exercise) (time.Time, bool) {
-		t, err := v.Interval.Start()
-		return t, err == nil
-	})
+	raw, err := s.Client.ListDataPoints(ctx, "exercise", "", 100)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("listing exercise: %w", err)
 	}
-	for _, sess := range sessions {
+	var env struct {
+		DataPoints []struct {
+			Name     string    `json:"name"`
+			Exercise *Exercise `json:"exercise"`
+		} `json:"dataPoints"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return false, fmt.Errorf("decoding exercise: %w", err)
+	}
+	found := false
+	for _, p := range env.DataPoints {
+		if p.Exercise == nil {
+			continue
+		}
+		sess := *p.Exercise
 		start, err := sess.Interval.Start()
 		if err != nil {
 			return false, fmt.Errorf("parsing exercise start time: %w", err)
 		}
+		if !isOnDay(start, day) {
+			continue
+		}
+		found = true
 		end, err := sess.Interval.End()
 		if err != nil {
 			return false, fmt.Errorf("parsing exercise end time: %w", err)
@@ -115,12 +135,13 @@ func (s *DBSyncer) syncExercise(ctx context.Context, day time.Time) (bool, error
 		domain := healthdata.ExerciseSession{
 			Day: dayKey(start.In(time.Local)), ExerciseType: sess.ExerciseType, StartTime: start, EndTime: end,
 			DurationMinutes: &duration, CaloriesBurned: &calories, AvgHeartRateBpm: avgHR,
+			DataPointID: p.Name[strings.LastIndex(p.Name, "/")+1:], HasGPS: sess.ExerciseMetadata.HasGps,
 		}
 		if err := s.upsertExerciseSession(ctx, domain); err != nil {
 			return false, err
 		}
 	}
-	return len(sessions) > 0, nil
+	return found, nil
 }
 
 // syncECG upserts every ECG reading starting on day into

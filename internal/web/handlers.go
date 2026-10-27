@@ -18,6 +18,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/sdhungan/Personal-Health-Data/internal/googleauth"
+	"github.com/sdhungan/Personal-Health-Data/internal/googlehealth"
 	"github.com/sdhungan/Personal-Health-Data/internal/syncengine"
 	"github.com/sdhungan/Personal-Health-Data/internal/web/views"
 	"github.com/sdhungan/Personal-Health-Data/internal/webauth"
@@ -583,6 +584,14 @@ func (s *Server) patchCurrentView(sse *datastar.ServerSentEventGenerator, ctx co
 	return sse.PatchElementTempl(views.DataViewBody(data))
 }
 
+// detailPatch swaps #detail-panel wholesale instead of morphing it. Each
+// opened item is a new view, and morphing would reuse the previous item's
+// elements: an activity's map <div> would be handed to the next activity
+// with Leaflet's internal state still attached, and Leaflet then refuses to
+// draw on it ("Map container is already initialized") — a blank map until
+// the page is reloaded.
+var detailPatch = datastar.WithModeReplace()
+
 // handleActivity answers a click on an activity list item, patching the
 // detail overlay's content (visibility is toggled client-side by the
 // $activityOpen signal the button also sets).
@@ -596,9 +605,24 @@ func (s *Server) handleActivity(c echo.Context) error {
 	sse := datastar.NewSSE(c.Response(), c.Request())
 	detail, err := fetchActivityDetail(c.Request().Context(), s.DB, userID, id)
 	if err != nil {
-		return sse.PatchElementTempl(views.ActivityDetailError(err.Error()))
+		return sse.PatchElementTempl(views.ActivityDetailError(err.Error()), detailPatch)
 	}
-	return sse.PatchElementTempl(views.ActivityDetailFragment(*detail))
+	// GPS route: cached in the DB after the first view, fetched from Google
+	// Health on that first view (needs a live syncer). A failure here only
+	// loses the map, not the rest of the detail.
+	if detail.HasGPS {
+		syncer := s.userGoogleSyncer(userID)
+		if syncer == nil {
+			syncer = &googlehealth.DBSyncer{DB: s.DB, UserID: userID} // cached routes still show
+		}
+		if route, err := syncer.ExerciseRoute(c.Request().Context(), id); err != nil {
+			detail.RouteError = "Couldn't load the route (reconnect Google Health in Settings to grant location access if you haven't): " + err.Error()
+		} else if len(route) > 0 {
+			encoded, _ := json.Marshal(route)
+			detail.RouteJSON = string(encoded)
+		}
+	}
+	return sse.PatchElementTempl(views.ActivityDetailFragment(*detail), detailPatch)
 }
 
 // handleFoodServing answers a click on a food-log list item, the same
@@ -614,9 +638,9 @@ func (s *Server) handleFoodServing(c echo.Context) error {
 	sse := datastar.NewSSE(c.Response(), c.Request())
 	detail, err := fetchFoodServingDetail(c.Request().Context(), s.DB, userID, id)
 	if err != nil {
-		return sse.PatchElementTempl(views.FoodServingDetailError(err.Error()))
+		return sse.PatchElementTempl(views.FoodServingDetailError(err.Error()), detailPatch)
 	}
-	return sse.PatchElementTempl(views.FoodServingDetailFragment(*detail))
+	return sse.PatchElementTempl(views.FoodServingDetailFragment(*detail), detailPatch)
 }
 
 // handleJournalSave is the Datastar-driven autosave/manual-save path: it

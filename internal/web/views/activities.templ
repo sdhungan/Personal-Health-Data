@@ -18,6 +18,12 @@ templ ActivityDetailFragment(d ActivityDetail) {
 				<div><span class="label">Avg heart rate</span><span>{ fmt.Sprintf("%.0f bpm", *d.AvgHeartRateBpm) }</span></div>
 			}
 		</div>
+		if d.RouteJSON != "" {
+			<h3>Route</h3>
+			<div class="activity-map" data-route={ d.RouteJSON }></div>
+		} else if d.RouteError != "" {
+			<p class="tile-empty">{ d.RouteError }</p>
+		}
 		if len(d.HeartRateSamples) > 0 {
 			<h3>Heart rate</h3>
 			@templ.Raw(renderLineChartSVG(d.HeartRateSamples, chartInstanceID(fmt.Sprintf("activity_%d", d.ID)), "bpm"))

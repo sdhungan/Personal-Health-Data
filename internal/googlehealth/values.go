@@ -121,6 +121,12 @@ type Exercise struct {
 	DisplayName    string                 `json:"displayName"`
 	ActiveDuration PBDuration             `json:"activeDuration"`
 	MetricsSummary ExerciseMetricsSummary `json:"metricsSummary"`
+	// ExerciseMetadata.HasGps is DOCUMENTED (developers.google.com/health/data-types/workouts:
+	// "call the export only when exerciseMetadata.hasGps is true") — every
+	// session in the real dump so far had an empty exerciseMetadata, i.e. false.
+	ExerciseMetadata struct {
+		HasGps bool `json:"hasGps"`
+	} `json:"exerciseMetadata"`
 }
 
 type ExerciseMetricsSummary struct {

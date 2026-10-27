@@ -368,18 +368,22 @@ func (s *DBSyncer) upsertExerciseSession(ctx context.Context, sess healthdata.Ex
 	_, err := s.DB.ExecContext(ctx, `
 		INSERT INTO watch_exercise_session (
 			user_id, day, exercise_type, start_time, end_time, duration_minutes,
-			calories_burned, avg_heart_rate_bpm, max_heart_rate_bpm, distance_m
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			calories_burned, avg_heart_rate_bpm, max_heart_rate_bpm, distance_m,
+			data_point_id, has_gps
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id, day, start_time) DO UPDATE SET
 			end_time           = excluded.end_time,
 			duration_minutes   = excluded.duration_minutes,
 			calories_burned    = excluded.calories_burned,
 			avg_heart_rate_bpm = excluded.avg_heart_rate_bpm,
 			max_heart_rate_bpm = excluded.max_heart_rate_bpm,
-			distance_m         = excluded.distance_m
+			distance_m         = excluded.distance_m,
+			data_point_id      = excluded.data_point_id,
+			has_gps            = excluded.has_gps
 	`,
 		s.UserID, sess.Day, sess.ExerciseType, sess.StartTime.Format(time.RFC3339), sess.EndTime.Format(time.RFC3339),
 		sess.DurationMinutes, sess.CaloriesBurned, sess.AvgHeartRateBpm, sess.MaxHeartRateBpm, sess.DistanceM,
+		sess.DataPointID, sess.HasGPS,
 	)
 	if err != nil {
 		return fmt.Errorf("upserting watch_exercise_session: %w", err)

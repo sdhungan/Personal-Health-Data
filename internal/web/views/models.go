@@ -190,6 +190,13 @@ type ActivityDetail struct {
 	StartTimeLabel   string
 	EndTimeLabel     string
 	HeartRateSamples []HRSample
+
+	// GPS route, only for sessions recorded with GPS: RouteJSON is
+	// [[lat,lng],...] for static/activity-map.js, RouteError why it's
+	// missing (e.g. location access not granted).
+	HasGPS     bool
+	RouteJSON  string
+	RouteError string
 }
 
 type HRSample struct {

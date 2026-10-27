@@ -905,9 +905,9 @@ func fetchActivityDetail(ctx context.Context, db *sql.DB, userID, id int64) (*vi
 	var avgHR sql.NullFloat64
 
 	err := db.QueryRowContext(ctx, `
-		SELECT id, day, exercise_type, start_time, end_time, duration_minutes, calories_burned, avg_heart_rate_bpm
+		SELECT id, day, exercise_type, start_time, end_time, duration_minutes, calories_burned, avg_heart_rate_bpm, has_gps
 		FROM watch_exercise_session WHERE user_id = ? AND id = ?
-	`, userID, id).Scan(&d.ID, &d.Day, &d.Type, &startTime, &endTime, &d.DurationMinutes, &d.CaloriesBurned, &avgHR)
+	`, userID, id).Scan(&d.ID, &d.Day, &d.Type, &startTime, &endTime, &d.DurationMinutes, &d.CaloriesBurned, &avgHR, &d.HasGPS)
 	if err != nil {
 		return nil, fmt.Errorf("querying activity %d: %w", id, err)
 	}
