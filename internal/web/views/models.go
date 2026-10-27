@@ -4,6 +4,8 @@
 // from query results and hands them to a component to render.
 package views
 
+import "time"
+
 // DashboardData is everything the main dashboard page needs: which day is
 // selected and the tiles to lay out in the grid.
 type DashboardData struct {
@@ -127,6 +129,9 @@ type DetailData struct {
 type StageRow struct {
 	Label  string
 	Stages []StageSegment
+	// Start/End set means draw it as a sleep hypnogram (a lane per stage,
+	// clock times along the bottom); zero means a flat segmented bar.
+	Start, End time.Time
 }
 
 // StatItem is one small label/value stat shown above a Detail view (e.g.
