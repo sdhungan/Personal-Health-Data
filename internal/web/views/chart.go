@@ -32,18 +32,16 @@ func chartYLabelSpans(b *strings.Builder, axisMin, axisMax float64, y func(float
 	}
 }
 
-// chartXLabelSpan writes one x-axis label. ordinal is its position among
-// the chart's rendered labels: the server can't know how wide a chart will
-// be (tiles resize), so every label is sent and style.css's container
-// queries hide every 2nd (x-skip2) or every non-4th (x-skip4) one when the
-// chart is too narrow for all of them — same rule for every chart type.
+// chartXLabelSpan writes one x-axis label. Every label is sent: the server
+// can't know how wide a resizable tile will be, so static/chart-labels.js
+// hides whichever ones would overlap at the real rendered width. ordinal is
+// the label's position among the chart's labels; the first starts at its
+// position instead of centering on it (x-first), so it can't reach left into
+// the y-axis labels.
 func chartXLabelSpan(b *strings.Builder, xpct float64, label string, ordinal int) {
 	class := "chart-x-label"
-	if ordinal%2 != 0 {
-		class += " x-skip2"
-	}
-	if ordinal%4 != 0 {
-		class += " x-skip4"
+	if ordinal == 0 {
+		class += " x-first"
 	}
 	fmt.Fprintf(b, `<span class="%s" style="left:%.2f%%">%s</span>`, class, xpct, escapeSVGText(label))
 }

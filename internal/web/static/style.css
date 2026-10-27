@@ -513,11 +513,7 @@ body.tile-resizing { user-select: none; }
   display: flex;
   min-height: 150px;
   padding: 8px 8px 20px 40px;
-  /* Size container for x-label thinning (chart.go's chartXLabelSpan). */
-  container: chart / inline-size;
 }
-@container chart (max-width: 540px) { .chart-x-label.x-skip2 { display: none; } }
-@container chart (max-width: 280px) { .chart-x-label.x-skip4 { display: none; } }
 .chart-plot {
   position: relative;
   flex: 1;
@@ -536,6 +532,7 @@ body.tile-resizing { user-select: none; }
 }
 .chart-y-label { right: calc(100% + 6px); transform: translateY(-50%); }
 .chart-x-label { top: calc(100% + 3px); transform: translateX(-50%); }
+.chart-x-label.x-first { transform: none; }
 .chart-goal-label { right: 4px; transform: translateY(-120%); }
 .chart-axis { stroke: var(--border); stroke-width: 1; }
 .chart-gridline { stroke: var(--text); stroke-width: 1; opacity: 0.08; }
@@ -882,7 +879,7 @@ body.tile-resizing { user-select: none; }
 }
 
 .body-history-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 0.9rem; margin-bottom: 0.5rem; }
-.body-history-table th, .body-history-table td { text-align: right; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); }
+.body-history-table th, .body-history-table td { text-align: right; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .body-history-table th:first-child, .body-history-table td:first-child { text-align: left; }
 .body-history-table th { color: var(--text-dim); font-weight: 500; }
 
@@ -924,3 +921,7 @@ body.tile-resizing { user-select: none; }
 .hyp-bar.stage-light { stroke: var(--cat-respiratory); }
 .hyp-bar.stage-deep  { stroke: var(--cat-sleep); }
 .hyp-connector { stroke: var(--text-dim); stroke-width: 1px; opacity: 0.45; }
+
+/* Content with a hard minimum width (tables) scrolls sideways inside its
+   tile instead of drawing past it. */
+.tile-scroll-x { overflow-x: auto; max-width: 100%; }
