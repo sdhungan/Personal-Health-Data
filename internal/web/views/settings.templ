@@ -85,6 +85,15 @@ templ GoogleClientSettingsPage(configured, lockedByFlag bool, successMsg, errMsg
 				<h2 class="brand-title" style="font-size:1.1rem">Your account's connection</h2>
 				if googleConnected {
 					<p class="body-saved-status">&#10003; Google Health is connected for { username }.</p>
+					// Reconnecting re-runs Google's consent screen: needed whenever a
+					// new scope is added (e.g. location, for activity routes), since
+					// an existing token never gains scopes on its own.
+					<form method="post" action="/settings/google-client/connect" class="body-form">
+						<div class="body-form-footer">
+							<button type="submit" class="body-carry-btn">Reconnect Google Health</button>
+							<span class="body-saved-status">Re-grants permissions, e.g. location for activity route maps.</span>
+						</div>
+					</form>
 				} else if configured {
 					<p>
 						Signed in as <strong>{ username }</strong>. Connect Google Health for this
