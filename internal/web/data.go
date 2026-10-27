@@ -825,21 +825,21 @@ func fetchSleepDetail(ctx context.Context, db *sql.DB, userID int64, day time.Ti
 
 	d.Stats = []views.StatItem{
 		{Label: "Total sleep", Value: views.FormatMinutes(light + deep + rem)},
-		{Label: "Awake", Value: minutesAndShare(awake, awake+light+deep+rem)},
-		{Label: "REM", Value: minutesAndShare(rem, awake+light+deep+rem)},
-		{Label: "Light", Value: minutesAndShare(light, awake+light+deep+rem)},
-		{Label: "Deep", Value: minutesAndShare(deep, awake+light+deep+rem)},
+		{Label: "Awake", Value: views.FormatMinutes(awake), Sub: shareOf(awake, awake+light+deep+rem)},
+		{Label: "REM", Value: views.FormatMinutes(rem), Sub: shareOf(rem, awake+light+deep+rem)},
+		{Label: "Light", Value: views.FormatMinutes(light), Sub: shareOf(light, awake+light+deep+rem)},
+		{Label: "Deep", Value: views.FormatMinutes(deep), Sub: shareOf(deep, awake+light+deep+rem)},
 	}
 	return d, nil
 }
 
-// minutesAndShare formats a sleep stage's time plus its share of the
-// whole time in bed, like Fitbit's legend: "56m · 10%".
-func minutesAndShare(minutes, total int64) string {
+// shareOf formats a sleep stage's share of the whole time in bed, like
+// Fitbit's legend: "10%".
+func shareOf(minutes, total int64) string {
 	if total <= 0 {
-		return views.FormatMinutes(minutes)
+		return ""
 	}
-	return fmt.Sprintf("%s · %d%%", views.FormatMinutes(minutes), (minutes*100+total/2)/total)
+	return fmt.Sprintf("%d%%", (minutes*100+total/2)/total)
 }
 
 // fetchSleepStages returns one session's stage timeline, positioned as

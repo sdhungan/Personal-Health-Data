@@ -396,6 +396,8 @@ func renderHypnogramSVG(stages []StageSegment, start, end time.Time, id string) 
 	fmt.Fprintf(&b, `<div class="chart-wrap hypnogram" data-signals="%s"><div class="chart-plot">`, escapeAttr(chartWrapSignals(id)))
 	b.WriteString(`<svg viewBox="0 0 100 100" class="chart-svg" preserveAspectRatio="none">`)
 
+	// Connectors go in first so the bars are drawn over their ends.
+	var bars strings.Builder
 	prevY, havePrev := 0.0, false
 	for _, s := range stages {
 		y, ok := hypnogramLaneY(s.Type)
@@ -407,12 +409,13 @@ func renderHypnogramSVG(stages []StageSegment, start, end time.Time, id string) 
 			fmt.Fprintf(&b, `<line x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f" class="hyp-connector"/>`, x1, prevY, x1, y)
 		}
 		prevY, havePrev = y, true
-		fmt.Fprintf(&b, `<line x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f" class="hyp-bar stage-%s"/>`, x1, y, x2, y, strings.ToLower(s.Type))
+		fmt.Fprintf(&bars, `<line x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f" class="hyp-bar stage-%s"/>`, x1, y, x2, y, strings.ToLower(s.Type))
 		// Hover target: the segment's whole lane band — easier to hit than
 		// the bar itself, which can be a single minute wide.
-		fmt.Fprintf(&b, `<rect x="%.2f" y="%.2f" width="%.2f" height="14" class="chart-hit-target" %s/>`,
+		fmt.Fprintf(&bars, `<rect x="%.2f" y="%.2f" width="%.2f" height="14" class="chart-hit-target" %s/>`,
 			x1, y-7, max(x2-x1, 0.3), hoverAttrs(id, (x1+x2)/2, y, s.TimeLabel, humanizeStageType(s.Type)))
 	}
+	b.WriteString(bars.String())
 	b.WriteString(`</svg>`)
 
 	for _, l := range hypnogramLanes {
