@@ -48,7 +48,7 @@ func Init(encPath, workPath string, key crypto.Key) error {
 	// Schema is already at the shape every migration in Migrations produces,
 	// so a fresh database starts at the latest version directly rather than
 	// replaying history it was never behind on.
-	if _, err := conn.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, len(Migrations))); err != nil {
+	if _, err := conn.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, migrationBase+len(Migrations))); err != nil {
 		conn.Close()
 		os.Remove(workPath)
 		return fmt.Errorf("setting schema version: %w", err)
@@ -140,35 +140,42 @@ func openWorkingFile(encPath, workPath string, key crypto.Key) (*Store, error) {
 
 // migrate applies any pending entries from Migrations (see migrations.go),
 // tracked via PRAGMA user_version. A database already at the latest version
-// (including every fresh Init, which sets it directly) is a no-op.
+// (including every fresh Init, which sets it directly) is a no-op; one
+// older than migrationBase is refused rather than opened with a schema this
+// code doesn't match.
 func (s *Store) migrate() error {
 	var version int
 	if err := s.conn.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("reading schema version: %w", err)
 	}
-	for i := version; i < len(Migrations); i++ {
-		if err := s.applyMigration(i); err != nil {
+	if version < migrationBase {
+		return fmt.Errorf("database schema version %d is older than %d, the oldest this healthd can upgrade: "+
+			"open it once with a healthd built from git tag pre-migration-squash to bring it up to date, or re-init the root", version, migrationBase)
+	}
+	for v := version; v < migrationBase+len(Migrations); v++ {
+		if err := s.applyMigration(v); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Store) applyMigration(i int) error {
+// applyMigration upgrades the database from version v to v+1.
+func (s *Store) applyMigration(v int) error {
 	tx, err := s.conn.Begin()
 	if err != nil {
-		return fmt.Errorf("beginning migration %d: %w", i, err)
+		return fmt.Errorf("beginning migration to version %d: %w", v+1, err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op once committed
 
-	if _, err := tx.Exec(Migrations[i]); err != nil {
-		return fmt.Errorf("applying migration %d: %w", i, err)
+	if _, err := tx.Exec(Migrations[v-migrationBase]); err != nil {
+		return fmt.Errorf("applying migration to version %d: %w", v+1, err)
 	}
-	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, i+1)); err != nil {
-		return fmt.Errorf("bumping schema version to %d: %w", i+1, err)
+	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, v+1)); err != nil {
+		return fmt.Errorf("bumping schema version to %d: %w", v+1, err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing migration %d: %w", i, err)
+		return fmt.Errorf("committing migration to version %d: %w", v+1, err)
 	}
 	return nil
 }

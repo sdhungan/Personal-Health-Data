@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -218,12 +219,12 @@ func TestCloseLeavesSharedWorkingFileIntactWhenStillOpen(t *testing.T) {
 	}
 }
 
-// TestMigrationAddsMCPTokenTable is a regression test for the migration
-// mechanism itself (migrations.go's Migrations list was empty until this
-// entry — see its doc comment) — simulates a database that predates the
-// mcp_token migration by dropping the table Init already created and
-// rolling PRAGMA user_version back, then confirms migrate() recreates it.
-func TestMigrationAddsMCPTokenTable(t *testing.T) {
+// TestMigrateUpgradesFromBaselineAndRejectsOlder covers the migration
+// mechanism: a database at migrationBase gets every pending entry applied
+// (here the real one, dropping mcp_token), a fresh Init starts at the
+// latest version, and a database older than migrationBase is refused
+// rather than opened with a schema the code doesn't match.
+func TestMigrateUpgradesFromBaselineAndRejectsOlder(t *testing.T) {
 	dir := t.TempDir()
 	encPath := filepath.Join(dir, "health.db.enc")
 	workPath := filepath.Join(dir, ".health.db.work")
@@ -237,25 +238,40 @@ func TestMigrationAddsMCPTokenTable(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer store.Close()
-
-	if _, err := store.DB().Exec(`DROP TABLE mcp_token; DROP TABLE dashboard_tile_layout;
-		ALTER TABLE watch_exercise_session DROP COLUMN data_point_id;
-		ALTER TABLE watch_exercise_session DROP COLUMN has_gps;
-		ALTER TABLE watch_exercise_session DROP COLUMN route_json`); err != nil {
-		t.Fatalf("dropping migrated tables to simulate a pre-migration database: %v", err)
+	conn := store.DB()
+	version := func() int {
+		var v int
+		if err := conn.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
 	}
-	if _, err := store.DB().Exec(`PRAGMA user_version = 0`); err != nil {
-		t.Fatalf("resetting schema version: %v", err)
+	latest := migrationBase + len(Migrations)
+	if v := version(); v != latest {
+		t.Fatalf("fresh database at version %d, want %d", v, latest)
 	}
 
+	// The live database just before this change: at the baseline, still
+	// carrying mcp_token.
+	if _, err := conn.Exec(fmt.Sprintf(`CREATE TABLE mcp_token (user_id INTEGER PRIMARY KEY); PRAGMA user_version = %d`, migrationBase)); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.migrate(); err != nil {
-		t.Fatalf("migrate: %v", err)
+		t.Fatalf("migrate from baseline: %v", err)
+	}
+	if v := version(); v != latest {
+		t.Errorf("after migrate: version %d, want %d", v, latest)
+	}
+	var n int
+	if err := conn.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name = 'mcp_token'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("mcp_token still present after migrate (count %d, err %v)", n, err)
 	}
 
-	var name string
-	err = store.DB().QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mcp_token'`).Scan(&name)
-	if err != nil {
-		t.Fatalf("mcp_token table missing after migration: %v", err)
+	if _, err := conn.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, migrationBase-1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.migrate(); err == nil {
+		t.Error("migrate accepted a database older than migrationBase")
 	}
 }
 

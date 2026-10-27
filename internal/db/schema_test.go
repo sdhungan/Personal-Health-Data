@@ -23,7 +23,6 @@ func TestSchemaExecutes(t *testing.T) {
 	wantTables := []string{
 		"users",
 		"web_session",
-		"mcp_token",
 		"user_profile",
 		"sync_state",
 		"watch_daily_summary",
