@@ -48,27 +48,29 @@ const bodyHistoryPage = 10
 // hidden server-side so they don't flash before Datastar initializes.
 templ bodyHistoryTileBody(t TileData) {
 	<div data-signals={ fmt.Sprintf("{bhLimit: %d}", bodyHistoryPage) }>
-		<table class="body-history-table">
-			<thead>
-				<tr><th>Day</th><th>Weight (kg)</th><th>Waist (cm)</th><th>Neck (cm)</th><th>Body Fat (%)</th></tr>
-			</thead>
-			<tbody>
-				for i, r := range t.BodyHistory {
-					<tr
-						data-show={ fmt.Sprintf("$bhLimit > %d", i) }
-						if i >= bodyHistoryPage {
-							style="display: none"
-						}
-					>
-						<td>{ r.Day }</td>
-						<td>{ cellValue(r.WeightKg) }</td>
-						<td>{ cellValue(r.WaistCm) }</td>
-						<td>{ cellValue(r.NeckCm) }</td>
-						<td>{ cellValue(r.BodyFatPct) }</td>
-					</tr>
-				}
-			</tbody>
-		</table>
+		<div class="tile-scroll-x">
+			<table class="body-history-table">
+				<thead>
+					<tr><th>Day</th><th>Weight (kg)</th><th>Waist (cm)</th><th>Neck (cm)</th><th>Body Fat (%)</th></tr>
+				</thead>
+				<tbody>
+					for i, r := range t.BodyHistory {
+						<tr
+							data-show={ fmt.Sprintf("$bhLimit > %d", i) }
+							if i >= bodyHistoryPage {
+								style="display: none"
+							}
+						>
+							<td>{ r.Day }</td>
+							<td>{ cellValue(r.WeightKg) }</td>
+							<td>{ cellValue(r.WaistCm) }</td>
+							<td>{ cellValue(r.NeckCm) }</td>
+							<td>{ cellValue(r.BodyFatPct) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
 		if len(t.BodyHistory) > bodyHistoryPage {
 			<button class="body-carry-btn" data-show={ fmt.Sprintf("$bhLimit < %d", len(t.BodyHistory)) } data-on:click={ fmt.Sprintf("$bhLimit += %d", bodyHistoryPage*3) }>
 				Show more

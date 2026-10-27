@@ -1,5 +1,6 @@
 // Drag-to-resize for expanded dashboard tiles: the right edge sets width,
-// the bottom edge height, the corner both. Width snaps to twelfths of the
+// the bottom edge height (a minimum — a tile never gets shorter than its
+// own content, see style.css), the corner both. Width snaps to twelfths of the
 // row (the dashboard's fixed 12-column grid) and height to 20px steps,
 // both applied live while dragging; the final size is saved once on
 // release (POST data-resize-url, see handleTileResize). Plain DOM rather
@@ -23,7 +24,7 @@ document.addEventListener("pointerdown", (e) => {
   // a tile header).
   const clamp = (span) => Math.min(Math.max(span, 2), cols);
   let width = clamp(Math.round((startW + gap) / (colW + gap)));
-  let height = parseInt(tile.style.height) || 0;
+  let height = parseInt(tile.style.minHeight) || 0;
 
   handle.setPointerCapture(e.pointerId);
   document.body.classList.add("tile-resizing");
@@ -35,7 +36,7 @@ document.addEventListener("pointerdown", (e) => {
     }
     if (mode.includes("y")) {
       height = Math.min(Math.max(Math.round((startH + ev.clientY - startY) / 20) * 20, 120), 1200);
-      tile.style.height = height + "px";
+      tile.style.minHeight = height + "px";
     }
   };
   const up = () => {
