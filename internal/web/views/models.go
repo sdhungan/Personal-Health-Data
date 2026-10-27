@@ -139,6 +139,7 @@ type StageRow struct {
 type StatItem struct {
 	Label string
 	Value string
+	Sub   string // optional second line under Value, e.g. a sleep stage's share "23%"
 }
 
 // StageSegment is one sleep stage's span within its session, or one

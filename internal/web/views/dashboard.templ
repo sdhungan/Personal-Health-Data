@@ -305,6 +305,9 @@ templ detailTileBody(t TileData) {
 			for _, s := range t.Detail.Stats {
 				<div class="detail-stat">
 					<span class="detail-stat-value">{ s.Value }</span>
+					if s.Sub != "" {
+						<span class="detail-stat-sub">{ s.Sub }</span>
+					}
 					<span class="detail-stat-label">{ s.Label }</span>
 				</div>
 			}
