@@ -261,6 +261,10 @@ func buildBodyMeasurementStatTile(ctx context.Context, db *sql.DB, userID int64,
 		t.SparklineValues = chart.Values
 	}
 	if expanded && chart != nil {
+		chart.Unit = def.Unit
+		for _, v := range chart.Values {
+			chart.ValueLabels = append(chart.ValueLabels, fmt.Sprintf("%.1f %s", v, def.Unit))
+		}
 		t.Chart = chart
 		t.BigValue = fmt.Sprintf("%.1f", chart.Average)
 		t.ChartSubtext = fmt.Sprintf("%d-day average: %s %s", days, t.BigValue, def.Unit)

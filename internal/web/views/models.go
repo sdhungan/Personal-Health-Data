@@ -129,8 +129,10 @@ type DetailData struct {
 type StageRow struct {
 	Label  string
 	Stages []StageSegment
-	// Start/End set means draw it as a sleep hypnogram (a lane per stage,
-	// clock times along the bottom); zero means a flat segmented bar.
+	// Lanes set means a lane chart over Start..End (a lane per segment type,
+	// clock times along the bottom — see renderLaneChartSVG); none means a
+	// flat segmented bar.
+	Lanes      []Lane
 	Start, End time.Time
 }
 
@@ -182,6 +184,10 @@ type ChartData struct {
 	Goal    *float64
 	Average float64
 	Total   float64
+	// Unit captions the y-axis (e.g. "km"); ValueLabels, when set, is each
+	// bar's tooltip text, formatted with its unit (e.g. "5.6 km", "6h 5m").
+	Unit        string
+	ValueLabels []string
 }
 
 // ActivitySummary is one row in the activities tile / list.
