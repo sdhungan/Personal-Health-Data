@@ -66,3 +66,38 @@ func TestMoveTileTakesTargetSlotAndPersists(t *testing.T) {
 		t.Error("saveTileSize(width 13): expected an error, widths are 2-12")
 	}
 }
+
+// TestSaveTileExpandedPersists checks a saved open/closed state comes back
+// from fetchTileLayout and survives a later size save.
+func TestSaveTileExpandedPersists(t *testing.T) {
+	conn, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.SetMaxOpenConns(1)
+	t.Cleanup(func() { conn.Close() })
+	if _, err := conn.Exec(dbpkg.Schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'x')`); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	if err := saveTileExpanded(ctx, conn, 1, "steps", false); err != nil { // steps defaults to open
+		t.Fatal(err)
+	}
+	if err := saveTileSize(ctx, conn, 1, "steps", tileSize{Width: 6}); err != nil {
+		t.Fatal(err)
+	}
+	_, sizes, err := fetchTileLayout(ctx, conn, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := sizes["steps"].Expanded; e == nil || *e {
+		t.Errorf("steps expanded = %v, want saved false", e)
+	}
+	if e := sizes["calories"].Expanded; e != nil {
+		t.Errorf("calories expanded = %v, want nil (never toggled)", *e)
+	}
+}

@@ -10,7 +10,10 @@ import (
 
 // tileSize is a tile's saved expanded size; zero fields mean "built-in
 // default".
-type tileSize struct{ Width, Height int }
+type tileSize struct {
+	Width, Height int
+	Expanded      *bool // saved open/closed state, nil = defaultExpandedKind
+}
 
 // fetchTileLayout returns DefaultTileKinds in userID's saved order (kinds
 // never moved keep their DefaultTileKinds index as their position) plus
@@ -25,7 +28,7 @@ func fetchTileLayout(ctx context.Context, db *sql.DB, userID int64) (order []str
 	}
 	sizes = map[string]tileSize{}
 
-	rows, err := db.QueryContext(ctx, `SELECT kind, position, width, height FROM dashboard_tile_layout WHERE user_id = ?`, userID)
+	rows, err := db.QueryContext(ctx, `SELECT kind, position, width, height, expanded FROM dashboard_tile_layout WHERE user_id = ?`, userID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("querying dashboard_tile_layout: %w", err)
 	}
@@ -33,7 +36,8 @@ func fetchTileLayout(ctx context.Context, db *sql.DB, userID int64) (order []str
 	for rows.Next() {
 		var kind string
 		var p, w, h sql.NullInt64
-		if err := rows.Scan(&kind, &p, &w, &h); err != nil {
+		var e sql.NullBool
+		if err := rows.Scan(&kind, &p, &w, &h, &e); err != nil {
 			return nil, nil, fmt.Errorf("scanning dashboard_tile_layout row: %w", err)
 		}
 		if _, known := pos[kind]; !known {
@@ -42,7 +46,11 @@ func fetchTileLayout(ctx context.Context, db *sql.DB, userID int64) (order []str
 		if p.Valid {
 			pos[kind] = int(p.Int64)
 		}
-		sizes[kind] = tileSize{Width: int(w.Int64), Height: int(h.Int64)}
+		size := tileSize{Width: int(w.Int64), Height: int(h.Int64)}
+		if e.Valid {
+			size.Expanded = &e.Bool
+		}
+		sizes[kind] = size
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, err
@@ -98,6 +106,19 @@ func saveTileSize(ctx context.Context, db *sql.DB, userID int64, kind string, si
 	`, userID, kind, size.Width, height)
 	if err != nil {
 		return fmt.Errorf("saving size of %s: %w", kind, err)
+	}
+	return nil
+}
+
+// saveTileExpanded saves kind's open/closed state, so the next page load
+// opens it the same way.
+func saveTileExpanded(ctx context.Context, db *sql.DB, userID int64, kind string, expanded bool) error {
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO dashboard_tile_layout (user_id, kind, expanded) VALUES (?, ?, ?)
+		ON CONFLICT (user_id, kind) DO UPDATE SET expanded = excluded.expanded
+	`, userID, kind, expanded)
+	if err != nil {
+		return fmt.Errorf("saving expanded state of %s: %w", kind, err)
 	}
 	return nil
 }

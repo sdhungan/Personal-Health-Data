@@ -40,7 +40,7 @@ func parseDay(c echo.Context) time.Time {
 // handful of tiles worth seeing in full by default.
 func defaultExpandedKind(kind string) bool {
 	switch kind {
-	case "steps", "heart_rate", "body", "sleep":
+	case "steps", "heart_rate", "body", "sleep", "weight", "waist", "neck", "body_fat":
 		return true
 	default:
 		return false
@@ -79,7 +79,7 @@ func buildDashboardData(ctx context.Context, db *sql.DB, userID int64, day time.
 	if err != nil {
 		return data, err
 	}
-	history, err := fetch7DayRows(ctx, db, userID, day)
+	history, err := fetchTrendRows(ctx, db, userID, day)
 	if err != nil {
 		return data, err
 	}
@@ -89,14 +89,20 @@ func buildDashboardData(ctx context.Context, db *sql.DB, userID int64, day time.
 	}
 
 	for _, kind := range tileKinds {
-		t := views.TileData{ID: "tile-" + kind, Metric: kind, Expanded: defaultExpandedKind(kind), Width: sizes[kind].Width, Height: sizes[kind].Height}
+		expanded := defaultExpandedKind(kind)
+		if e := sizes[kind].Expanded; e != nil {
+			expanded = *e
+		}
+		t := views.TileData{ID: "tile-" + kind, Metric: kind, Expanded: expanded, Width: sizes[kind].Width, Height: sizes[kind].Height}
 		switch {
 		case kind == "activities":
 			t, err = buildActivitiesTile(ctx, db, userID, t, day, t.Expanded)
 		case kind == "body":
 			t, err = buildBodyTile(ctx, db, userID, t, day)
+		case kind == "body_history":
+			t, err = buildBodyHistoryTile(ctx, db, userID, t)
 		case kind == "weight" || kind == "waist" || kind == "neck" || kind == "body_fat":
-			t, err = buildBodyMeasurementStatTile(ctx, db, userID, t, kind, day, t.Expanded)
+			t, err = buildBodyMeasurementStatTile(ctx, db, userID, t, kind, day, t.Expanded, false)
 		case kind == "hr_zones":
 			t, err = buildHeartRateZonesTile(ctx, db, userID, t, day, t.Expanded)
 		case kind == "active_minutes_by_level":
@@ -148,6 +154,8 @@ func shouldHideEmptyTile(t views.TileData) bool {
 		return len(t.Activities) == 0
 	case views.TileKindFoodLog:
 		return len(t.FoodLog) == 0
+	case views.TileKindBodyHistory:
+		return len(t.BodyHistory) == 0
 	default:
 		return t.Empty
 	}
@@ -243,8 +251,14 @@ func (s *Server) handleTile(c echo.Context) error {
 	if !slices.Contains(DefaultTileKinds, kind) {
 		return c.String(http.StatusNotFound, "unknown tile kind")
 	}
+	ctx, userID, expanded := c.Request().Context(), webauth.CurrentUserID(c), c.QueryParam("expanded") == "true"
+	// Every call here is an expand/collapse click (or a body tile's range
+	// toggle, always expanded), so remember it for the next page load.
 	sse := datastar.NewSSE(c.Response(), c.Request())
-	return s.patchOneTile(sse, c.Request().Context(), webauth.CurrentUserID(c), kind, day, c.QueryParam("expanded") == "true")
+	if err := saveTileExpanded(ctx, s.DB, userID, kind, expanded); err != nil {
+		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
+	}
+	return s.patchOneTile(sse, ctx, userID, kind, day, expanded, c.QueryParam("all") == "true")
 }
 
 // handleTileMove persists a drag-and-drop reorder. The browser has already
@@ -275,7 +289,7 @@ func (s *Server) handleTileResize(c echo.Context) error {
 
 // patchOneTile builds kind's tile for day (with its saved size) and patches
 // it in place by id.
-func (s *Server) patchOneTile(sse *datastar.ServerSentEventGenerator, ctx context.Context, userID int64, kind string, day time.Time, expanded bool) error {
+func (s *Server) patchOneTile(sse *datastar.ServerSentEventGenerator, ctx context.Context, userID int64, kind string, day time.Time, expanded, showAll bool) error {
 	_, sizes, err := fetchTileLayout(ctx, s.DB, userID)
 	if err != nil {
 		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
@@ -286,8 +300,10 @@ func (s *Server) patchOneTile(sse *datastar.ServerSentEventGenerator, ctx contex
 		t, err = buildActivitiesTile(ctx, s.DB, userID, t, day, expanded)
 	case kind == "body":
 		t, err = buildBodyTile(ctx, s.DB, userID, t, day)
+	case kind == "body_history":
+		t, err = buildBodyHistoryTile(ctx, s.DB, userID, t)
 	case kind == "weight" || kind == "waist" || kind == "neck" || kind == "body_fat":
-		t, err = buildBodyMeasurementStatTile(ctx, s.DB, userID, t, kind, day, expanded)
+		t, err = buildBodyMeasurementStatTile(ctx, s.DB, userID, t, kind, day, expanded, showAll)
 	// hr_zones was missing from this switch even before this pass (found
 	// and flagged as an out-of-scope bug earlier this session) — fixed here
 	// since active_minutes_by_level/active_zone_minutes_by_zone/
@@ -308,7 +324,7 @@ func (s *Server) patchOneTile(sse *datastar.ServerSentEventGenerator, ctx contex
 			err = ferr
 			break
 		}
-		history, ferr := fetch7DayRows(ctx, s.DB, userID, day)
+		history, ferr := fetchTrendRows(ctx, s.DB, userID, day)
 		if ferr != nil {
 			err = ferr
 			break
@@ -682,7 +698,6 @@ func (s *Server) handleBodyMeasurementSave(c echo.Context) error {
 	// both shapes (and a JSON null, just in case) rather than assuming one.
 	var signals struct {
 		BMWeight json.RawMessage `json:"bmweight"`
-		BMHeight json.RawMessage `json:"bmheight"`
 		BMWaist  json.RawMessage `json:"bmwaist"`
 		BMNeck   json.RawMessage `json:"bmneck"`
 	}
@@ -694,31 +709,12 @@ func (s *Server) handleBodyMeasurementSave(c echo.Context) error {
 	}
 
 	weight := parseOptionalFloatRaw(signals.BMWeight)
-	height := parseOptionalFloatRaw(signals.BMHeight)
 	waist := parseOptionalFloatRaw(signals.BMWaist)
 	neck := parseOptionalFloatRaw(signals.BMNeck)
-	if err := saveBodyMeasurement(ctx, s.DB, userID, day, weight, height, waist, neck); err != nil {
+	if err := saveBodyMeasurement(ctx, s.DB, userID, day, weight, waist, neck); err != nil {
 		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
 	}
 	return s.patchBodyTile(sse, ctx, userID, day, "Saved "+time.Now().Format("15:04:05"))
-}
-
-// handleBodyMeasurementCarryForward answers the "Carry forward" button:
-// fills whichever of today's weight/waist/neck are empty from the most
-// recent earlier day that has a value for that specific field.
-func (s *Server) handleBodyMeasurementCarryForward(c echo.Context) error {
-	ctx := c.Request().Context()
-	day := c.QueryParam("day")
-	if day == "" {
-		day = time.Now().Format(dateLayout)
-	}
-	userID := webauth.CurrentUserID(c)
-
-	sse := datastar.NewSSE(c.Response(), c.Request())
-	if err := carryForwardBodyMeasurement(ctx, s.DB, userID, day); err != nil {
-		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
-	}
-	return s.patchBodyTile(sse, ctx, userID, day, "Carried forward from a previous day")
 }
 
 // bodyDerivedTileKinds are every read-only stat tile whose value comes from
@@ -753,16 +749,16 @@ func (s *Server) patchBodyTile(sse *datastar.ServerSentEventGenerator, ctx conte
 	}
 
 	for _, kind := range bodyDerivedTileKinds {
-		dt := views.TileData{ID: "tile-" + kind, Metric: kind}
-		dt, err = buildBodyMeasurementStatTile(ctx, s.DB, userID, dt, kind, dayTime, false)
-		if err != nil {
-			return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
-		}
-		if err := sse.PatchElementTempl(views.Tile(dt, day)); err != nil {
+		if err := s.patchOneTile(sse, ctx, userID, kind, dayTime, true, false); err != nil {
 			return err
 		}
 	}
-	return nil
+
+	ht, err := buildBodyHistoryTile(ctx, s.DB, userID, views.TileData{ID: "tile-body_history", Metric: "body_history"})
+	if err != nil {
+		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
+	}
+	return sse.PatchElementTempl(views.Tile(ht, day))
 }
 
 // parseOptionalFloatRaw converts a Datastar signal value that may arrive as

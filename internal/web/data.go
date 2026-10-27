@@ -84,15 +84,23 @@ func fetchDailySummaryRow(ctx context.Context, db *sql.DB, userID int64, day str
 	return r, nil
 }
 
-// fetch7DayRows returns a day->row map for the 7 days ending on endDay
+// trendDays is how many days every trend chart/sparkline covers, ending on
+// the selected day — two weeks shows a trend better than one.
+const trendDays = 14
+
+// trendLabel is a trend chart's x-axis label for d: weekday names would
+// repeat past one week, so the date instead.
+func trendLabel(d time.Time) string { return d.Format("Jan 2") }
+
+// fetchTrendRows returns a day->row map for the trendDays days ending on endDay
 // (inclusive), missing days simply absent from the map.
-func fetch7DayRows(ctx context.Context, db *sql.DB, userID int64, endDay time.Time) (map[string]dashboardDailyRow, error) {
-	start := endDay.AddDate(0, 0, -6).Format(dateLayout)
+func fetchTrendRows(ctx context.Context, db *sql.DB, userID int64, endDay time.Time) (map[string]dashboardDailyRow, error) {
+	start := endDay.AddDate(0, 0, -(trendDays - 1)).Format(dateLayout)
 	end := endDay.Format(dateLayout)
 
 	rows, err := db.QueryContext(ctx, `SELECT day, `+dailySummaryColumns+` FROM watch_daily_summary WHERE user_id = ? AND day BETWEEN ? AND ?`, userID, start, end)
 	if err != nil {
-		return nil, fmt.Errorf("querying 7-day watch_daily_summary range: %w", err)
+		return nil, fmt.Errorf("querying trend-range watch_daily_summary range: %w", err)
 	}
 	defer rows.Close()
 
@@ -116,7 +124,7 @@ func fetch7DayRows(ctx context.Context, db *sql.DB, userID int64, endDay time.Ti
 	// and this must not silently drop that day.
 	nutRows, err := db.QueryContext(ctx, `SELECT day, energy_kcal, kcal_burned_cronometer, protein_g, carbs_g, fat_g FROM cronometer_daily_nutrition WHERE user_id = ? AND day BETWEEN ? AND ?`, userID, start, end)
 	if err != nil {
-		return nil, fmt.Errorf("querying 7-day cronometer_daily_nutrition range: %w", err)
+		return nil, fmt.Errorf("querying trend-range cronometer_daily_nutrition range: %w", err)
 	}
 	defer nutRows.Close()
 	for nutRows.Next() {
@@ -152,7 +160,7 @@ func fromFloat64(p *float64) (float64, bool) {
 }
 
 // metricDef describes one stat-tile's data: how to pull today's value and
-// a 7-day series out of a healthdata.DailySummary, and how to format it.
+// a trend series out of a healthdata.DailySummary, and how to format it.
 type metricDef struct {
 	Title    string
 	Icon     string
@@ -321,17 +329,17 @@ var DefaultTileKinds = []string{
 	"steps", "calories", "active_energy", "distance", "active_minutes", "active_minutes_by_level",
 	"floors", "altitude", "sedentary", "activity_level", "activities",
 	"heart_rate", "resting_hr", "hrv", "hr_zones", "active_zone_minutes_by_zone",
-	"body", "weight", "waist", "neck", "body_fat", "blood_glucose", "core_body_temp",
+	"body", "weight", "waist", "neck", "body_fat", "body_history", "blood_glucose", "core_body_temp",
 	"sleep",
 	"spo2", "respiratory_rate", "vo2max",
 	"nutrition_energy", "nutrition_expenditure", "nutrition_deficit", "nutrition_protein", "nutrition_carbs", "nutrition_fat", "food_log",
 }
 
 // buildStatTile builds one stat/sleep tile. Collapsed, every metric gets a
-// small 7-day sparkline alongside its big value (steps also gets a
+// small 14-day (trendDays) sparkline alongside its big value (steps also gets a
 // goal-progress ring). Expanded, metrics with real finer-than-daily data
 // behind them (steps, heart rate, sleep) show that detail instead of yet
-// another daily-average chart — everything else falls back to the 7-day
+// another daily-average chart — everything else falls back to the 14-day
 // trend, since there's genuinely nothing finer stored for it (see
 // prerequisite.md).
 func buildStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, kind string, day time.Time, expanded bool, today dashboardDailyRow, history map[string]dashboardDailyRow) (views.TileData, error) {
@@ -401,19 +409,19 @@ func buildStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileDa
 			t.Empty = false
 		}
 	case "resting_hr", "hrv":
-		// 7-day line over only the days with data — a missing day plotted
+		// trendDays line over only the days with data — a missing day plotted
 		// as 0 would drag the dynamic y-axis floor down with it.
 		d := &views.DetailData{Kind: "line", LineUnit: def.Unit}
 		var total float64
-		for i := 6; i >= 0; i-- {
+		for i := trendDays - 1; i >= 0; i-- {
 			dd := day.AddDate(0, 0, -i)
 			if v, ok := def.Extract(history[dd.Format(dateLayout)]); ok {
-				d.LineSamples = append(d.LineSamples, views.HRSample{TimeLabel: dd.Format("Mon"), Bpm: v})
+				d.LineSamples = append(d.LineSamples, views.HRSample{TimeLabel: trendLabel(dd), Bpm: v})
 				total += v
 			}
 		}
 		if n := len(d.LineSamples); n > 0 {
-			d.Stats = []views.StatItem{{Label: "7-day average", Value: def.Format(total / float64(n))}}
+			d.Stats = []views.StatItem{{Label: fmt.Sprintf("%d-day average", trendDays), Value: def.Format(total / float64(n))}}
 			t.Detail = d
 			t.Empty = false
 		}
@@ -421,7 +429,7 @@ func buildStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileDa
 		if chart := buildChart(day, history, def.Extract, nil); chart != nil {
 			t.Chart = chart
 			t.BigValue = def.Format(chart.Average)
-			t.ChartSubtext = fmt.Sprintf("7-day average: %s", t.BigValue)
+			t.ChartSubtext = fmt.Sprintf("%d-day average: %s", trendDays, t.BigValue)
 			t.Empty = false
 		}
 	}
@@ -827,21 +835,21 @@ func buildChart(day time.Time, history map[string]dashboardDailyRow, extract fun
 	c := &views.ChartData{Goal: goal}
 	var total float64
 	any := false
-	for i := 6; i >= 0; i-- {
+	for i := trendDays - 1; i >= 0; i-- {
 		d := day.AddDate(0, 0, -i)
 		v, ok := extract(history[d.Format(dateLayout)])
 		if ok {
 			total += v
 			any = true
 		}
-		c.Labels = append(c.Labels, d.Format("Mon"))
+		c.Labels = append(c.Labels, trendLabel(d))
 		c.Values = append(c.Values, v)
 	}
 	if !any {
 		return nil
 	}
 	c.Total = total
-	c.Average = total / 7
+	c.Average = total / trendDays
 	return c
 }
 

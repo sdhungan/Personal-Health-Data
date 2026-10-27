@@ -444,6 +444,16 @@ body {
   border-radius: 6px;
 }
 .tile-expand-btn:hover, .tile-collapse-btn:hover { color: var(--text); background: var(--tile-bg-hover); }
+.tile-range-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+}
+.tile-range-btn:hover { color: var(--text); background: var(--tile-bg-hover); }
 
 /* Resize handles on expanded tiles (see static/tile-resize.js): invisible
    strips on the right and bottom edges plus a small visible corner grip. */
@@ -862,3 +872,9 @@ body.tile-resizing { user-select: none; }
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+.body-history-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 0.9rem; margin-bottom: 0.5rem; }
+.body-history-table th, .body-history-table td { text-align: right; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); }
+.body-history-table th:first-child, .body-history-table td:first-child { text-align: left; }
+.body-history-table th { color: var(--text-dim); font-weight: 500; }
+

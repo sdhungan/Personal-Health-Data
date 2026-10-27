@@ -65,7 +65,7 @@ func TestBuildBodyMeasurementChartAveragesOnlyLoggedDays(t *testing.T) {
 		"2026-08-14": 90,
 		"2026-08-13": 100,
 	}
-	chart := buildBodyMeasurementChart(day, history)
+	chart := buildBodyMeasurementChart(day, history, 7)
 	if chart == nil {
 		t.Fatal("buildBodyMeasurementChart: expected a chart, got nil")
 	}
@@ -80,7 +80,7 @@ func TestBuildBodyMeasurementChartNilWhenNoData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if chart := buildBodyMeasurementChart(day, map[string]float64{}); chart != nil {
+	if chart := buildBodyMeasurementChart(day, map[string]float64{}, 7); chart != nil {
 		t.Errorf("buildBodyMeasurementChart with no data: expected nil, got %+v", chart)
 	}
 }

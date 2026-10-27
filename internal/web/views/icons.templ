@@ -60,12 +60,6 @@ templ stepRingSVG(pct float64) {
 	</svg>
 }
 
-templ iconCarryForward() {
-	<svg viewBox="0 0 24 24" width="14" height="14" class="icon">
-		<path d="M12 4v10M12 14l-4-4M12 14l4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-	</svg>
-}
-
 // iconFor dispatches a metricDef/tile Icon key (see internal/web/data.go's
 // metricDefs) to its inline SVG, so the badge each tile header renders stays
 // driven by data rather than duplicated per-template svg markup.

@@ -57,11 +57,12 @@ type GoogleBulkSyncStatus struct {
 type TileKind string
 
 const (
-	TileKindStat       TileKind = "stat"
-	TileKindSleep      TileKind = "sleep"
-	TileKindActivities TileKind = "activities"
-	TileKindBody       TileKind = "body"
-	TileKindFoodLog    TileKind = "food_log"
+	TileKindStat        TileKind = "stat"
+	TileKindSleep       TileKind = "sleep"
+	TileKindActivities  TileKind = "activities"
+	TileKindBody        TileKind = "body"
+	TileKindFoodLog     TileKind = "food_log"
+	TileKindBodyHistory TileKind = "body_history"
 )
 
 // TileData is a generic tile. Not every field applies to every kind —
@@ -83,10 +84,10 @@ type TileData struct {
 	BigValue        string
 	Unit            string
 	Subtext         string
-	SparklineValues []float64   // 7-day trend values, rendered small when collapsed (see renderSparklineSVG)
+	SparklineValues []float64   // trendDays-day trend values, rendered small when collapsed (see renderSparklineSVG)
 	RingPct         *float64    // 0..1 progress ring drawn next to BigValue (steps only); nil means no ring
-	Chart           *ChartData  // expanded bar chart — either an hourly-for-the-day view (steps) or a 7-day trend (everything else with no finer granularity)
-	ChartSubtext    string      // label above Chart, set by whichever builder populated it (e.g. "Total today" vs "7-day average")
+	Chart           *ChartData  // expanded bar chart — either an hourly-for-the-day view (steps) or a 14-day trend (everything else with no finer granularity)
+	ChartSubtext    string      // label above Chart, set by whichever builder populated it (e.g. "Total today" vs "14-day average")
 	Detail          *DetailData // expanded rich detail view (heart-rate intraday line, sleep stage timeline) — takes priority over Chart when set
 	Empty           bool
 	EmptyMsg        string
@@ -97,6 +98,12 @@ type TileData struct {
 	// TileKindBody
 	Body *BodyMeasurementData
 
+	// Body measurement stat tiles: all-time line instead of the 14-day chart
+	ShowAll bool
+
+	// TileKindBodyHistory, newest first
+	BodyHistory []BodyHistoryRow
+
 	// TileKindFoodLog
 	FoodLog []ServingSummary
 }
@@ -104,7 +111,7 @@ type TileData struct {
 // DetailData is an expanded tile's rich detail view, for metrics with
 // finer-than-daily data actually available (heart rate intraday samples,
 // sleep stage timeline) — as opposed to Chart, which is either an
-// hourly-for-the-day bar chart (steps) or a 7-day trend (every metric with
+// hourly-for-the-day bar chart (steps) or a 14-day trend (every metric with
 // no source finer than one value per day).
 type DetailData struct {
 	Kind        string // "line" (heart rate) or "stages" (sleep)
@@ -136,22 +143,26 @@ type StageSegment struct {
 	TimeLabel string
 }
 
-// BodyMeasurementData is the editable weight/height/waist/neck form for one
-// day. Weight and height both reflect body_measurement's raw/override split
+// BodyHistoryRow is one day in the Body History list.
+type BodyHistoryRow struct {
+	Day                                   string
+	WeightKg, WaistCm, NeckCm, BodyFatPct *float64
+}
+
+// BodyMeasurementData is the editable weight/waist/neck form for one
+// day. Weight reflects body_measurement's raw/override split
 // (a connected scale writes raw, this form writes override); waist/neck have
 // no upstream source at all, so the form writes them directly.
 type BodyMeasurementData struct {
-	Day         string
-	WeightKg    *float64
-	HeightCm    *float64
-	WaistCm     *float64
-	NeckCm      *float64
-	HasPriorDay bool // whether "Carry forward" has anything to offer
-	SavedAt     string
-	Error       string
+	Day      string
+	WeightKg *float64
+	WaistCm  *float64
+	NeckCm   *float64
+	SavedAt  string
+	Error    string
 }
 
-// ChartData is a small 7-day bar chart, rendered as inline SVG (see
+// ChartData is a small 14-day bar chart, rendered as inline SVG (see
 // chart.go) so no client-side charting library is needed.
 type ChartData struct {
 	Labels  []string

@@ -150,6 +150,16 @@ func tileGroup(t TileData) string {
 	return t.Category
 }
 
+// isBodyStatTile: the weight/waist/neck/body-fat tiles, always expanded
+// (see defaultExpandedKind in handlers.go).
+func isBodyStatTile(metric string) bool {
+	switch metric {
+	case "weight", "waist", "neck", "body_fat":
+		return true
+	}
+	return false
+}
+
 func fullWidthExpanded(t TileData) bool {
 	return t.Expanded && t.Kind != TileKindStat && t.Kind != TileKindSleep
 }
@@ -196,7 +206,16 @@ templ Tile(t TileData, day string) {
 				<span class="tile-title">{ t.Title }</span>
 			</div>
 			<div class="tile-header-actions">
-				if t.Kind != TileKindBody {
+				if isBodyStatTile(t.Metric) {
+					// Always expanded: a range toggle instead of collapse.
+					<button class="tile-range-btn" data-on:click={ getExpr(bodyRangeURL(t.Metric, day, !t.ShowAll)) }>
+						if t.ShowAll {
+							Last 14 days
+						} else {
+							Show all
+						}
+					</button>
+				} else if t.Kind != TileKindBody && t.Kind != TileKindBodyHistory {
 					if t.Expanded {
 						<button class="tile-collapse-btn" data-on:click={ getExpr(tileURL(t.Metric, day, false)) } title="Collapse">
 							@iconCollapse()
@@ -219,6 +238,8 @@ templ Tile(t TileData, day string) {
 					@activitiesTileBody(t)
 				case TileKindBody:
 					@bodyTileBody(t)
+				case TileKindBodyHistory:
+					@bodyHistoryTileBody(t)
 				case TileKindFoodLog:
 					@foodLogTileBody(t)
 			}
@@ -235,7 +256,7 @@ func tileSizeClass(t TileData) string {
 	if (t.Kind == TileKindStat || t.Kind == TileKindSleep) && (t.Chart != nil || t.Detail != nil) {
 		return "tile-wide"
 	}
-	if t.Kind == TileKindActivities || t.Kind == TileKindBody || t.Kind == TileKindFoodLog {
+	if t.Kind == TileKindActivities || t.Kind == TileKindBody || t.Kind == TileKindBodyHistory || t.Kind == TileKindFoodLog {
 		return "tile-wide"
 	}
 	return ""
@@ -273,7 +294,7 @@ templ statTileBody(t TileData) {
 
 // detailTileBody renders an expanded metric's rich detail view — an
 // intraday heart-rate line or a sleep stage timeline — as opposed to the
-// generic 7-day/hourly bar chart every other metric falls back to.
+// generic 14-day/hourly bar chart every other metric falls back to.
 templ detailTileBody(t TileData) {
 	if t.Detail.Message != "" {
 		<div class="tile-empty">{ t.Detail.Message }</div>

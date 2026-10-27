@@ -99,10 +99,6 @@ func bodyMeasurementSaveURL(day string) string {
 	return APIURL("body-measurement", url.Values{"day": {day}})
 }
 
-func bodyMeasurementCarryForwardURL(day string) string {
-	return APIURL("body-measurement/carry-forward", url.Values{"day": {day}})
-}
-
 func cronometerLoginURL() string {
 	return APIURL("cronometer/login", nil)
 }
@@ -125,3 +121,9 @@ func initialSignals(day string) string {
 // runs, e.g. getExpr(tileURL(...)) -> "@get('/api/tile?...')".
 func getExpr(url string) string  { return "@get('" + url + "')" }
 func postExpr(url string) string { return "@post('" + url + "')" }
+
+// bodyRangeURL fetches a body measurement stat tile (always expanded) with
+// either its 14-day chart or, when all is true, every logged day.
+func bodyRangeURL(kind, day string, all bool) string {
+	return APIURL("tile", url.Values{"kind": {kind}, "day": {day}, "expanded": {"true"}, "all": {fmt.Sprintf("%t", all)}})
+}

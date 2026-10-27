@@ -46,4 +46,6 @@ var Migrations = []string{
 		SELECT user_id, kind, position, CAST(ROUND(width * 12.0 / 5) AS INTEGER), height FROM dashboard_tile_layout;
 	DROP TABLE dashboard_tile_layout;
 	ALTER TABLE dashboard_tile_layout_new RENAME TO dashboard_tile_layout`,
+	// Per-account open/closed state, NULL = the tile's built-in default.
+	`ALTER TABLE dashboard_tile_layout ADD COLUMN expanded INTEGER`,
 }

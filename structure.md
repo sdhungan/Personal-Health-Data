@@ -290,7 +290,7 @@ One Go module (`github.com/sdhungan/Personal-Health-Data`), one binary
     day+category breakdown builder, backs the heart-rate-zone and
     active-minutes/active-zone-minutes-by-level tiles).
   - `bodymeasurement.go` — `buildBodyTile`/`fetchBodyMeasurement` (the
-    weight/waist/neck form) + its save/carry-forward handlers.
+    weight/waist/neck form) + its save handler, plus the Body History list tile.
   - `foodlog.go` — `buildFoodLogTile` (excludes plain water servings — see
     its own comment) + `fetchFoodServingDetail` (the click-to-detail popup).
   - `cronometer.go` — the Cronometer account card (login form / connected
