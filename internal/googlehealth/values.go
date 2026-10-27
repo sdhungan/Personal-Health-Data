@@ -93,14 +93,20 @@ type TotalCaloriesRollup struct {
 	KcalSum PBFloat64 `json:"kcalSum"`
 }
 
-// FloorsRollup is UNCONFIRMED — floors has NoList set (list() outright
-// rejected), so dailyRollUp is the only fetch path, but this account's own
-// floors rollup response has always come back empty (no real sample to
-// verify a shape against). This guesses by symmetry with
-// TotalCaloriesRollup; a wrong key here is safe (ExtractRollupValues just
-// returns no points) rather than silently decoding the wrong field.
+// FloorsRollup is CONFIRMED (2026-10-28, real dailyRollUp response:
+// {"floors":{"countSum":"8"}}). floors has NoList set (list() outright
+// rejected), so dailyRollUp is the only fetch path. The earlier guess,
+// floorsSum, silently decoded every day as 0.
 type FloorsRollup struct {
-	FloorsSum PBFloat64 `json:"floorsSum"`
+	CountSum PBInt64 `json:"countSum"`
+}
+
+// DistanceRollup is CONFIRMED (2026-10-28, real dailyRollUp response:
+// {"distance":{"millimetersSum":"8745700"}}). Used instead of summing
+// list() points: the watch and the phone (Health Connect) both report
+// distance, and the rollup is already deduplicated across them.
+type DistanceRollup struct {
+	MillimetersSum PBInt64 `json:"millimetersSum"`
 }
 
 // ---- CONFIRMED (sessions) ----
@@ -179,9 +185,11 @@ type Steps struct {
 	Count    PBInt64                 `json:"count"`
 }
 
+// Distance is CONFIRMED (2026-10-28): list() points carry millimeters,
+// not meters. Unused by sync (see DistanceRollup); kept for DumpToday.
 type Distance struct {
-	Interval ObservationTimeInterval `json:"interval"`
-	Meters   PBInt64                 `json:"meters"`
+	Interval    ObservationTimeInterval `json:"interval"`
+	Millimeters PBInt64                 `json:"millimeters"`
 }
 
 type Floors struct {
@@ -206,8 +214,10 @@ type ActiveMinutes struct {
 }
 
 type ActiveMinutesByLevel struct {
-	ActivityLevel string  `json:"activityLevel"` // "LIGHT", "MODERATE", "VIGOROUS"
-	Minutes       PBInt64 `json:"minutes"`
+	ActivityLevel string `json:"activityLevel"` // "LIGHT", "MODERATE", "VIGOROUS"
+	// CONFIRMED (2026-10-28): the key is activeMinutes, not minutes — the
+	// earlier guess silently decoded every day as 0.
+	Minutes PBInt64 `json:"activeMinutes"`
 }
 
 type ActivityLevel struct {
@@ -308,7 +318,7 @@ type IrregularRhythmNotification struct {
 // ---- INFERRED (no documentation found; guessed by symmetry) ----
 
 // Height is INFERRED from Weight's shape (sample_time + a single double
-// field); Google's other length-valued types (Distance) use meters.
+// field). Note Distance uses millimeters, so "meters" here is unverified.
 type Height struct {
 	SampleTime ObservationSampleTime `json:"sampleTime"`
 	Meters     PBFloat64             `json:"meters"`

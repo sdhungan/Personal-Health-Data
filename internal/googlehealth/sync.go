@@ -215,7 +215,8 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 		floors         FloorsRollup
 		floorsFound    bool
 		steps          []SourcedValue[Steps]
-		distance       []Distance
+		distance       DistanceRollup
+		distanceFound  bool
 		altitude       []Altitude
 		sedentary      []SedentaryPeriod
 		activeEnergy   []ActiveEnergyBurned
@@ -265,22 +266,19 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 		totalCal, totalCalFound, err = fetchDailyRollup[TotalCaloriesRollup](gctx, s.Client, "total-calories", day)
 		return err
 	})
-	// floors' own rollup response has always come back empty for this
-	// account, so FloorsRollup's shape (values.go) is a best-effort guess,
-	// not confirmed — safe if wrong, ExtractRollupValues simply finds no
-	// points rather than silently decoding the wrong field.
 	g.Go(func() (err error) {
 		floors, floorsFound, err = fetchDailyRollup[FloorsRollup](gctx, s.Client, "floors", day)
+		return err
+	})
+	// distance: rollup, not list() — see DistanceRollup.
+	g.Go(func() (err error) {
+		distance, distanceFound, err = fetchDailyRollup[DistanceRollup](gctx, s.Client, "distance", day)
 		return err
 	})
 
 	// ---- Interval types, filtered server-side to this day ----
 	g.Go(func() (err error) {
 		steps, err = fetchIntervalPointsWithSource[Steps](gctx, s.Client, "steps", day)
-		return err
-	})
-	g.Go(func() (err error) {
-		distance, err = fetchIntervalPoints[Distance](gctx, s.Client, "distance", day)
 		return err
 	})
 	g.Go(func() (err error) {
@@ -357,7 +355,7 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 		hasData = true
 	}
 	if floorsFound {
-		climbed := int64(floors.FloorsSum)
+		climbed := int64(floors.CountSum)
 		out.FloorsClimbed = &climbed
 		hasData = true
 	}
@@ -369,13 +367,9 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 		out.StepsTotal = &total
 		hasData = true
 	}
-	if len(distance) > 0 {
-		var total int64
-		for _, p := range distance {
-			total += int64(p.Meters)
-		}
-		metersF := float64(total)
-		out.DistanceM = &metersF
+	if distanceFound {
+		meters := float64(distance.MillimetersSum) / 1000
+		out.DistanceM = &meters
 		hasData = true
 	}
 	if len(altitude) > 0 {
