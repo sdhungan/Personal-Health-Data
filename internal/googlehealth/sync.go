@@ -306,9 +306,10 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 	})
 
 	// ---- Sleep duration, from the same sleep sessions synced separately ----
+	// Keyed by wake-up day, same as syncSleep.
 	g.Go(func() (err error) {
 		sleeps, err = fetchUnfilteredForDay[Sleep](gctx, s.Client, "sleep", day, func(v Sleep) (time.Time, bool) {
-			t, err := v.Interval.Start()
+			t, err := v.Interval.End()
 			return t, err == nil
 		})
 		return err
@@ -412,6 +413,7 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 		hasData = true
 	}
 	if len(sleeps) > 0 {
+		// Main sleep plus naps: every session ending on this day.
 		var total int64
 		for _, sess := range sleeps {
 			total += int64(sess.Summary.MinutesAsleep)

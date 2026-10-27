@@ -117,10 +117,16 @@ type DetailData struct {
 	Kind        string // "line" (heart rate) or "stages" (sleep)
 	Message     string // empty-state / info text, e.g. "only cached for the last 3 days"
 	Stats       []StatItem
-	LineSamples []HRSample     // Kind == "line"
-	LineUnit    string         // Kind == "line": tooltip unit, e.g. "bpm"
-	Stages      []StageSegment // Kind == "stages"
-	RangeLabel  string         // Kind == "stages": formatted session start – end
+	LineSamples []HRSample // Kind == "line"
+	LineUnit    string     // Kind == "line": tooltip unit, e.g. "bpm"
+	StageRows   []StageRow // Kind == "stages": one timeline per row (sleep: main sleep + each nap)
+}
+
+// StageRow is one segmented timeline bar with its label, e.g.
+// "Nap · 1:43 PM – 2:52 PM".
+type StageRow struct {
+	Label  string
+	Stages []StageSegment
 }
 
 // StatItem is one small label/value stat shown above a Detail view (e.g.

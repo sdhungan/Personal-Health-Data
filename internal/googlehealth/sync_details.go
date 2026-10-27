@@ -12,13 +12,15 @@ import (
 	"github.com/sdhungan/Personal-Health-Data/internal/healthdata"
 )
 
-// syncSleep upserts every sleep session starting on day into
-// watch_sleep_session/watch_sleep_stage. The longest session of the day
-// (by time in the sleep period) is flagged is_main_sleep — Google's API
-// doesn't mark this itself, unlike Fitbit's own app.
+// syncSleep upserts every sleep session ending on day into
+// watch_sleep_session/watch_sleep_stage. Sleep belongs to the day you wake
+// up (the Fitbit/Google convention), so a night starting at 11 PM counts
+// toward the next day, together with that day's naps. The longest session
+// of the day (by time in the sleep period) is flagged is_main_sleep —
+// Google's API doesn't mark this itself, unlike Fitbit's own app.
 func (s *DBSyncer) syncSleep(ctx context.Context, day time.Time) (bool, error) {
 	sessions, err := fetchUnfilteredForDay[Sleep](ctx, s.Client, "sleep", day, func(v Sleep) (time.Time, bool) {
-		t, err := v.Interval.Start()
+		t, err := v.Interval.End()
 		return t, err == nil
 	})
 	if err != nil {
@@ -64,7 +66,7 @@ func (s *DBSyncer) syncSleep(ctx context.Context, day time.Time) (bool, error) {
 		duration := int64(sess.Summary.MinutesInSleepPeriod)
 		awake := int64(sess.Summary.MinutesAwake)
 		domain := healthdata.SleepSession{
-			Day: dayKey(start.In(time.Local)), StartTime: start, EndTime: end, IsMainSleep: i == mainIdx,
+			Day: dayKey(end.In(time.Local)), StartTime: start, EndTime: end, IsMainSleep: i == mainIdx,
 			DurationMinutes: &duration, EfficiencyPct: efficiencyPct, MinutesAwake: &awake,
 			MinutesLight: &minutesLight, MinutesDeep: &minutesDeep, MinutesRem: &minutesRem,
 		}
@@ -404,9 +406,9 @@ func (s *DBSyncer) syncRespiratoryRateSleepSummary(ctx context.Context, day time
 		var sessionID int64
 		err = s.DB.QueryRowContext(ctx, `
 			SELECT id FROM watch_sleep_session
-			WHERE user_id = ? AND day = ? AND start_time <= ? AND end_time > ?
+			WHERE user_id = ? AND start_time <= ? AND end_time > ?
 			ORDER BY duration_minutes DESC LIMIT 1
-		`, s.UserID, dayStr, sampleTime.Format(time.RFC3339), sampleTime.Format(time.RFC3339)).Scan(&sessionID)
+		`, s.UserID, sampleTime.Format(time.RFC3339), sampleTime.Format(time.RFC3339)).Scan(&sessionID)
 		if errors.Is(err, sql.ErrNoRows) {
 			err = s.DB.QueryRowContext(ctx, `
 				SELECT id FROM watch_sleep_session WHERE user_id = ? AND day = ? AND is_main_sleep = 1 LIMIT 1

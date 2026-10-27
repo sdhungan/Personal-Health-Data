@@ -58,4 +58,13 @@ var Migrations = []string{
 	// Re-open every finished Google Health day so the scheduler's next pass
 	// re-syncs history with the corrected parsing.
 	`UPDATE sync_state SET status = 'pending' WHERE source = 'google_health' AND status IN ('complete', 'missing')`,
+	// Data fix: sleep moved from the day a session starts to the day it
+	// ends (wake-up day). Rows filed under the old day would linger next to
+	// the re-filed ones, so drop them (sync owns these tables outright; no
+	// UI writes them) and clear the stale daily totals — every Google
+	// Health day is already pending re-sync (previous migration), which
+	// rebuilds both.
+	`DELETE FROM watch_sleep_stage;
+	DELETE FROM watch_sleep_session;
+	UPDATE watch_daily_summary SET sleep_duration_minutes = NULL`,
 }

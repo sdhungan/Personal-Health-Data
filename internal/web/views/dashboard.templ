@@ -315,12 +315,14 @@ templ detailTileBody(t TileData) {
 				@templ.Raw(renderLineChartSVG(t.Detail.LineSamples, chartInstanceID(t.ID), t.Detail.LineUnit))
 			}
 		case "stages":
-			if len(t.Detail.Stages) > 0 {
-				if t.Detail.RangeLabel != "" {
-					<div class="tile-stat-sub">{ t.Detail.RangeLabel }</div>
+			if len(t.Detail.StageRows) > 0 {
+				for i, row := range t.Detail.StageRows {
+					if row.Label != "" {
+						<div class="tile-stat-sub">{ row.Label }</div>
+					}
+					@templ.Raw(renderStageTimelineSVG(row.Stages, chartInstanceID(fmt.Sprintf("%s_%d", t.ID, i))))
 				}
-				@templ.Raw(renderStageTimelineSVG(t.Detail.Stages, chartInstanceID(t.ID)))
-				@stageLegend(t.Detail.Stages)
+				@stageLegend(allStages(t.Detail.StageRows))
 			}
 	}
 }
@@ -338,6 +340,16 @@ templ stageLegend(stages []StageSegment) {
 			</span>
 		}
 	</div>
+}
+
+// allStages flattens every row's segments, so the legend covers every
+// stage type shown in any row.
+func allStages(rows []StageRow) []StageSegment {
+	var out []StageSegment
+	for _, r := range rows {
+		out = append(out, r.Stages...)
+	}
+	return out
 }
 
 func distinctStageTypes(stages []StageSegment) []string {
