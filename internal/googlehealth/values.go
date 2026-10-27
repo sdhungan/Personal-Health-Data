@@ -185,18 +185,6 @@ type Steps struct {
 	Count    PBInt64                 `json:"count"`
 }
 
-// Distance is CONFIRMED (2026-10-28): list() points carry millimeters,
-// not meters. Unused by sync (see DistanceRollup); kept for DumpToday.
-type Distance struct {
-	Interval    ObservationTimeInterval `json:"interval"`
-	Millimeters PBInt64                 `json:"millimeters"`
-}
-
-type Floors struct {
-	Interval ObservationTimeInterval `json:"interval"`
-	Floor    PBFloat64               `json:"floor"`
-}
-
 type Altitude struct {
 	Interval        ObservationTimeInterval `json:"interval"`
 	GainMillimeters PBInt64                 `json:"gainMillimeters"`
@@ -259,15 +247,6 @@ type BodyFat struct {
 	Percentage PBFloat64             `json:"percentage"`
 }
 
-// HeartRateVariability is CONFIRMED — was DOCUMENTED-only (field guessed
-// as "millis", an int64) until real data showed the actual key is
-// "rootMeanSquareOfSuccessiveDifferencesMilliseconds", a float (e.g.
-// 42.1), not an integer millisecond count.
-type HeartRateVariability struct {
-	SampleTime                                        ObservationSampleTime `json:"sampleTime"`
-	RootMeanSquareOfSuccessiveDifferencesMilliseconds PBFloat64             `json:"rootMeanSquareOfSuccessiveDifferencesMilliseconds"`
-}
-
 type BloodGlucose struct {
 	SampleTime                         ObservationSampleTime `json:"sampleTime"`
 	BloodGlucoseMilligramsPerDeciliter PBFloat64             `json:"bloodGlucoseMilligramsPerDeciliter"`
@@ -275,11 +254,6 @@ type BloodGlucose struct {
 	MeasurementTiming                  string                `json:"measurementTiming,omitempty"`
 	MealType                           string                `json:"mealType,omitempty"`
 	Specimen                           string                `json:"specimen,omitempty"`
-}
-
-type OxygenSaturation struct {
-	SampleTime ObservationSampleTime `json:"sampleTime"`
-	Percentage PBFloat64             `json:"percentage"`
 }
 
 type CoreBodyTemperature struct {
@@ -307,18 +281,11 @@ type DailyVo2Max struct {
 	Vo2MaxCovariance   PBFloat64 `json:"vo2MaxCovariance,omitempty"`
 }
 
-// IrregularRhythmNotification is DOCUMENTED only partially — Google's
-// reference names alert_window/heart_beat sub-messages without detailing
-// their fields, and this account has never triggered one (list() returns
-// {}), so there's nothing real to check them against yet.
-type IrregularRhythmNotification struct {
-	Date Date `json:"date"`
-}
-
 // ---- INFERRED (no documentation found; guessed by symmetry) ----
 
 // Height is INFERRED from Weight's shape (sample_time + a single double
-// field). Note Distance uses millimeters, so "meters" here is unverified.
+// field). Google sends other lengths in millimeters (see DistanceRollup),
+// so "meters" here is unverified.
 type Height struct {
 	SampleTime ObservationSampleTime `json:"sampleTime"`
 	Meters     PBFloat64             `json:"meters"`
@@ -328,15 +295,6 @@ type Height struct {
 // Google's reference doesn't detail a value field for it.
 type SedentaryPeriod struct {
 	Interval ObservationTimeInterval `json:"interval"`
-}
-
-// CaloriesInHeartRateZone is INFERRED from TimeInHeartRateZone's shape. No
-// longer used for syncing (calories-in-heart-rate-zone rejects list()
-// outright — see datatypes.go's NoList) but kept for DumpToday's capture.
-type CaloriesInHeartRateZone struct {
-	Interval      ObservationTimeInterval `json:"interval"`
-	HeartRateZone string                  `json:"heartRateZone"`
-	Kcal          PBFloat64               `json:"kcal"`
 }
 
 // ---- DOCUMENTED (dailyRollUp response shapes) ----

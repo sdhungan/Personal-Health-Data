@@ -99,10 +99,8 @@ func writeResult(outDir, filename string, data json.RawMessage, callErr error) {
 		var apiErr *APIError
 		if errors.As(callErr, &apiErr) {
 			var prettyBody bytes.Buffer
-			body := any(json.RawMessage(apiErr.Body))
-			if json.Indent(&prettyBody, apiErr.Body, "", "  ") != nil {
-				body = string(apiErr.Body)
-			} else {
+			var body any = string(apiErr.Body) // not JSON: keep it as text
+			if json.Indent(&prettyBody, apiErr.Body, "", "  ") == nil {
 				body = json.RawMessage(prettyBody.Bytes())
 			}
 			payload, _ = json.MarshalIndent(map[string]any{
