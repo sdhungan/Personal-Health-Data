@@ -2,12 +2,21 @@
 // data-route='[[lat,lng],...]' becomes a Leaflet map (vendored
 // static/leaflet.js) on OpenStreetMap tiles, with the route drawn as a line
 // plus start/end dots. Watches the DOM rather than running inline, since
-// the overlay's content arrives as a Datastar SSE patch. Only map tiles are
-// fetched from OSM — the route itself never leaves the browser.
+// the overlay's content arrives as a Datastar SSE patch (in replace mode —
+// see detailPatch in handlers.go — so every opened activity brings a fresh
+// container). Only map tiles are fetched from OSM — the route itself never
+// leaves the browser.
+const maps = [];
 const initRouteMaps = () => {
+  // Release maps whose container was patched away, so their listeners
+  // don't pile up with every activity opened.
+  for (let i = maps.length - 1; i >= 0; i--) {
+    if (!maps[i].getContainer().isConnected) maps.splice(i, 1)[0].remove();
+  }
   for (const el of document.querySelectorAll("[data-route]:not(.leaflet-container)")) {
     const route = JSON.parse(el.dataset.route);
     const map = L.map(el);
+    maps.push(map);
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
