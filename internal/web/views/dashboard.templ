@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -320,7 +321,11 @@ templ detailTileBody(t TileData) {
 					if row.Label != "" {
 						<div class="tile-stat-sub">{ row.Label }</div>
 					}
-					@templ.Raw(renderStageTimelineSVG(row.Stages, chartInstanceID(fmt.Sprintf("%s_%d", t.ID, i))))
+					if !row.Start.IsZero() {
+						@templ.Raw(renderHypnogramSVG(row.Stages, row.Start, row.End, chartInstanceID(fmt.Sprintf("%s_%d", t.ID, i))))
+					} else {
+						@templ.Raw(renderStageTimelineSVG(row.Stages, chartInstanceID(fmt.Sprintf("%s_%d", t.ID, i))))
+					}
 				}
 				@stageLegend(allStages(t.Detail.StageRows))
 			}
@@ -361,6 +366,17 @@ func distinctStageTypes(stages []StageSegment) []string {
 			out = append(out, s.Type)
 		}
 	}
+	// Sleep stages follow the hypnogram's lane order (awake, REM, light,
+	// deep); anything else keeps first-seen order.
+	lane := func(t string) int {
+		for i, l := range hypnogramLanes {
+			if l.Type == t {
+				return i
+			}
+		}
+		return len(hypnogramLanes)
+	}
+	slices.SortStableFunc(out, func(a, b string) int { return lane(a) - lane(b) })
 	return out
 }
 
@@ -369,6 +385,9 @@ func distinctStageTypes(stages []StageSegment) []string {
 // MODERATELY_ACTIVE, VERY_ACTIVE), splitting on "_" so the legend reads
 // "Lightly Active" rather than "Lightly_active".
 func humanizeStageType(s string) string {
+	if s == "REM" {
+		return s
+	}
 	if s == "" {
 		return s
 	}
