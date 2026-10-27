@@ -14,18 +14,21 @@ templ JournalView(data DashboardData, j JournalData) {
 			<textarea
 				id="journal-textarea"
 				class="journal-textarea"
+				data-beacon-url={ journalBeaconURL(j.Day) }
 				data-bind:journalcontent
 				data-on:input__debounce.800ms={ "$autosave && " + postExpr(journalSaveURL(j.Day)) }
 			>{ j.Content }</textarea>
 			@JournalPreviewFragment(j)
 		</div>
+		<!-- templ doesn't interpolate inside <script>: the beacon URL comes from
+		     the textarea's data-beacon-url. -->
 		<script>
 			(function() {
 				window.addEventListener('beforeunload', function() {
 					var el = document.getElementById('journal-textarea');
 					if (!el) return;
 					var blob = new Blob([el.value], { type: 'text/plain' });
-					navigator.sendBeacon({ journalBeaconURL(j.Day) }, blob);
+					navigator.sendBeacon(el.dataset.beaconUrl, blob);
 				});
 			})();
 		</script>
