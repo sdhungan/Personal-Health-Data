@@ -1,0 +1,5 @@
+# Every text file is LF in the working tree too, whatever a machine's
+# core.autocrlf says. With autocrlf=true, checkouts wrote CRLF into Go and
+# templ sources: files showed as modified with no real change, and templ
+# copied the \r into generated HTML strings.
+* text=auto eol=lf
