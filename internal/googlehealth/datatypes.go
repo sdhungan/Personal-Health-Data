@@ -15,8 +15,9 @@ const (
 // This list is every type under the activity_and_fitness, sleep,
 // health_metrics_and_measurements, ecg, and irn scopes — the scopes
 // healthd actually requests (see internal/googleauth.Scopes). Nutrition,
-// location, profile, and settings types are excluded since we don't
-// request those scopes.
+// profile and settings types are excluded since we don't request those
+// scopes. Location has no list()able data type of its own, only the
+// per-exercise exportExerciseTcx route (see route.go).
 type dataType struct {
 	Name string
 	Kind kind

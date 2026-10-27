@@ -878,3 +878,29 @@ body.tile-resizing { user-select: none; }
 .body-history-table th:first-child, .body-history-table td:first-child { text-align: left; }
 .body-history-table th { color: var(--text-dim); font-weight: 500; }
 
+.activity-map { height: 320px; border-radius: 8px; margin-bottom: 1rem; }
+/* Activity with a GPS route: the panel fills up to 90% of the window
+   (a square on a landscape screen, capped at 90vh both ways) and never
+   scrolls — it's a column where everything keeps its natural height except
+   the map, which takes whatever is left, so a smaller window or a phone
+   shrinks the map instead of overflowing. */
+.overlay-panel:has(.activity-map) {
+  width: min(90vw, 90vh);
+  height: 90vh;
+  max-width: none;
+  max-height: none;
+  box-sizing: border-box;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.overlay-panel:has(.activity-map) #detail-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.overlay-panel:has(.activity-map) #detail-panel > * { flex: none; }
+.overlay-panel #detail-panel > .activity-map { flex: 1; min-height: 80px; height: auto; margin-bottom: 8px; }
+/* Compact chrome around the map, so the map gets the space. */
+.overlay-panel:has(.activity-map) #detail-panel > h2 { margin: 0 0 8px; }
+.overlay-panel:has(.activity-map) #detail-panel > h3 { margin: 4px 0 6px; }
+.overlay-panel:has(.activity-map) #detail-panel > .detail-meta { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); margin: 0 0 8px; }
+/* Heart-rate chart under the map: 100px, shrinking on tiny windows; margin
+   leaves room for its x-axis labels. */
+.overlay-panel:has(.activity-map) #detail-panel > .chart-wrap { flex: 0 1 100px; min-height: 50px; margin-bottom: 20px; }

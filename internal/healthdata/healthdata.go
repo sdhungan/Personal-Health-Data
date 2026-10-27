@@ -230,6 +230,10 @@ type ExerciseSession struct {
 	AvgHeartRateBpm *float64
 	MaxHeartRateBpm *float64
 	DistanceM       *float64
+	// DataPointID is the API's own id (last segment of the data point's
+	// name), needed to fetch the GPS route; HasGPS says whether one exists.
+	DataPointID string
+	HasGPS      bool
 }
 
 // ECGReading is one ECG reading or irregular-rhythm notification — an

@@ -48,4 +48,8 @@ var Migrations = []string{
 	ALTER TABLE dashboard_tile_layout_new RENAME TO dashboard_tile_layout`,
 	// Per-account open/closed state, NULL = the tile's built-in default.
 	`ALTER TABLE dashboard_tile_layout ADD COLUMN expanded INTEGER`,
+	// Exercise GPS routes (see schema.sql's watch_exercise_session).
+	`ALTER TABLE watch_exercise_session ADD COLUMN data_point_id TEXT;
+	ALTER TABLE watch_exercise_session ADD COLUMN has_gps INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE watch_exercise_session ADD COLUMN route_json TEXT`,
 }

@@ -352,6 +352,14 @@ CREATE TABLE watch_exercise_session (
     avg_heart_rate_bpm  REAL,
     max_heart_rate_bpm  REAL,
     distance_m          REAL,
+    -- GPS route support: data_point_id is the API's own id (needed for
+    -- exportExerciseTcx), has_gps its exerciseMetadata.hasGps, and
+    -- route_json the route's [[lat,lng],...] once fetched — lazily, on the
+    -- first click of the activity, since it's a separate API call per
+    -- session (see googlehealth.DBSyncer.ExerciseRoute).
+    data_point_id       TEXT,
+    has_gps             INTEGER NOT NULL DEFAULT 0,
+    route_json          TEXT,
     UNIQUE (user_id, day, start_time)
 );
 

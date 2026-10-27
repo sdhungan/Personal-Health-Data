@@ -18,6 +18,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/sdhungan/Personal-Health-Data/internal/googleauth"
+	"github.com/sdhungan/Personal-Health-Data/internal/googlehealth"
 	"github.com/sdhungan/Personal-Health-Data/internal/syncengine"
 	"github.com/sdhungan/Personal-Health-Data/internal/web/views"
 	"github.com/sdhungan/Personal-Health-Data/internal/webauth"
@@ -597,6 +598,21 @@ func (s *Server) handleActivity(c echo.Context) error {
 	detail, err := fetchActivityDetail(c.Request().Context(), s.DB, userID, id)
 	if err != nil {
 		return sse.PatchElementTempl(views.ActivityDetailError(err.Error()))
+	}
+	// GPS route: cached in the DB after the first view, fetched from Google
+	// Health on that first view (needs a live syncer). A failure here only
+	// loses the map, not the rest of the detail.
+	if detail.HasGPS {
+		syncer := s.userGoogleSyncer(userID)
+		if syncer == nil {
+			syncer = &googlehealth.DBSyncer{DB: s.DB, UserID: userID} // cached routes still show
+		}
+		if route, err := syncer.ExerciseRoute(c.Request().Context(), id); err != nil {
+			detail.RouteError = "Couldn't load the route (reconnect Google Health in Settings to grant location access if you haven't): " + err.Error()
+		} else if len(route) > 0 {
+			encoded, _ := json.Marshal(route)
+			detail.RouteJSON = string(encoded)
+		}
 	}
 	return sse.PatchElementTempl(views.ActivityDetailFragment(*detail))
 }
