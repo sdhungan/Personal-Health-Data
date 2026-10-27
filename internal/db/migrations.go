@@ -52,4 +52,10 @@ var Migrations = []string{
 	`ALTER TABLE watch_exercise_session ADD COLUMN data_point_id TEXT;
 	ALTER TABLE watch_exercise_session ADD COLUMN has_gps INTEGER NOT NULL DEFAULT 0;
 	ALTER TABLE watch_exercise_session ADD COLUMN route_json TEXT`,
+	// Data fix, not a schema change: distance, floors, and active minutes
+	// were decoded from the wrong API field names and stored as 0 for every
+	// day (see googlehealth.DistanceRollup/FloorsRollup/ActiveMinutesByLevel).
+	// Re-open every finished Google Health day so the scheduler's next pass
+	// re-syncs history with the corrected parsing.
+	`UPDATE sync_state SET status = 'pending' WHERE source = 'google_health' AND status IN ('complete', 'missing')`,
 }
