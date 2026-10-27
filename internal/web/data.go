@@ -405,7 +405,7 @@ func buildStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileDa
 			return t, err
 		}
 		t.Detail = detail
-		if len(detail.Stages) > 0 {
+		if len(detail.StageRows) > 0 {
 			t.Empty = false
 		}
 	case "resting_hr", "hrv":
@@ -616,12 +616,12 @@ func buildCategoryTile(ctx context.Context, db *sql.DB, userID int64, t views.Ti
 		return t, nil
 	}
 
-	d := &views.DetailData{Kind: "stages"}
+	d := &views.DetailData{Kind: "stages", StageRows: []views.StageRow{{}}}
 	cum := 0.0
 	for _, c := range cats {
 		start := cum / total
 		cum += c.Value
-		d.Stages = append(d.Stages, views.StageSegment{Type: c.Category, StartPct: start, EndPct: cum / total})
+		d.StageRows[0].Stages = append(d.StageRows[0].Stages, views.StageSegment{Type: c.Category, StartPct: start, EndPct: cum / total})
 		d.Stats = append(d.Stats, views.StatItem{Label: humanize(c.Category), Value: views.FormatMinutes(int64(c.Value))})
 	}
 	t.Detail = d
@@ -737,9 +737,9 @@ func buildActivityLevelSegmentTile(ctx context.Context, db *sql.DB, userID int64
 
 	dayStart := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
 	daySpan := 24 * time.Hour
-	d := &views.DetailData{Kind: "stages", RangeLabel: "00:00 – 23:59"}
+	d := &views.DetailData{Kind: "stages", StageRows: []views.StageRow{{Label: "00:00 – 23:59"}}}
 	for _, s := range segments {
-		d.Stages = append(d.Stages, views.StageSegment{
+		d.StageRows[0].Stages = append(d.StageRows[0].Stages, views.StageSegment{
 			Type:      s.Level,
 			StartPct:  s.Start.Sub(dayStart).Seconds() / daySpan.Seconds(),
 			EndPct:    s.End.Sub(dayStart).Seconds() / daySpan.Seconds(),
@@ -755,31 +755,89 @@ func buildActivityLevelSegmentTile(ctx context.Context, db *sql.DB, userID int64
 	return t, nil
 }
 
-// fetchSleepDetail builds the sleep tile's expanded detail: the day's main
-// sleep session's stage-by-stage timeline (watch_sleep_stage) plus its
-// awake/light/deep/rem minute totals (already computed at sync time onto
-// watch_sleep_session, not recomputed here).
+// fetchSleepDetail builds the sleep tile's expanded detail: Total sleep
+// (time asleep — light + deep + REM — across the main sleep and any naps)
+// first, then awake/light/deep/rem summed the same way, and one
+// stage-by-stage timeline row per session, in start order. Sessions are
+// filed under the day they end (see googlehealth's syncSleep), so this is
+// last night plus the day's naps.
 func fetchSleepDetail(ctx context.Context, db *sql.DB, userID int64, day time.Time) (*views.DetailData, error) {
 	dayStr := day.Format(dateLayout)
-	var sessionID int64
-	var startTime, endTime string
-	var minutesAwake, minutesLight, minutesDeep, minutesRem sql.NullInt64
-
-	err := db.QueryRowContext(ctx, `
-		SELECT id, start_time, end_time, minutes_awake, minutes_light, minutes_deep, minutes_rem
-		FROM watch_sleep_session WHERE user_id = ? AND day = ? AND is_main_sleep = 1
-		ORDER BY duration_minutes DESC LIMIT 1
-	`, userID, dayStr).Scan(&sessionID, &startTime, &endTime, &minutesAwake, &minutesLight, &minutesDeep, &minutesRem)
-	if errors.Is(err, sql.ErrNoRows) {
-		return &views.DetailData{Kind: "stages", Message: "No sleep session recorded for this day."}, nil
-	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, start_time, end_time, is_main_sleep,
+		       minutes_awake, minutes_light, minutes_deep, minutes_rem
+		FROM watch_sleep_session WHERE user_id = ? AND day = ? ORDER BY start_time
+	`, userID, dayStr)
 	if err != nil {
 		return nil, fmt.Errorf("querying watch_sleep_session for %s: %w", dayStr, err)
 	}
+	type session struct {
+		id                      int64
+		start, end              time.Time
+		isMain                  bool
+		awake, light, deep, rem int64
+	}
+	var sessions []session
+	for rows.Next() {
+		var s session
+		var startStr, endStr string
+		var awake, light, deep, rem sql.NullInt64
+		if err := rows.Scan(&s.id, &startStr, &endStr, &s.isMain, &awake, &light, &deep, &rem); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scanning watch_sleep_session row: %w", err)
+		}
+		var e1, e2 error
+		s.start, e1 = time.Parse(time.RFC3339, startStr)
+		s.end, e2 = time.Parse(time.RFC3339, endStr)
+		if e1 != nil || e2 != nil || !s.end.After(s.start) {
+			continue
+		}
+		s.awake, s.light, s.deep, s.rem = awake.Int64, light.Int64, deep.Int64, rem.Int64
+		sessions = append(sessions, s)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(sessions) == 0 {
+		return &views.DetailData{Kind: "stages", Message: "No sleep session recorded for this day."}, nil
+	}
 
-	// sessionID already uniquely identifies a row that just came back
-	// scoped to userID above; the join to watch_sleep_stage has no user_id
-	// of its own (see schema.sql) since it's a pure child of that session.
+	d := &views.DetailData{Kind: "stages"}
+	var awake, light, deep, rem int64
+	for _, s := range sessions {
+		awake, light, deep, rem = awake+s.awake, light+s.light, deep+s.deep, rem+s.rem
+
+		label := s.start.Local().Format("3:04 PM") + " – " + s.end.Local().Format("3:04 PM")
+		if len(sessions) > 1 {
+			kind := "Nap"
+			if s.isMain {
+				kind = "Main sleep"
+			}
+			label = kind + " · " + label + " · " + views.FormatMinutes(s.light+s.deep+s.rem)
+		}
+		stages, err := fetchSleepStages(ctx, db, s.id, s.start, s.end)
+		if err != nil {
+			return nil, err
+		}
+		d.StageRows = append(d.StageRows, views.StageRow{Label: label, Stages: stages})
+	}
+
+	d.Stats = []views.StatItem{
+		{Label: "Total sleep", Value: views.FormatMinutes(light + deep + rem)},
+		{Label: "Awake", Value: views.FormatMinutes(awake)},
+		{Label: "Light", Value: views.FormatMinutes(light)},
+		{Label: "Deep", Value: views.FormatMinutes(deep)},
+		{Label: "REM", Value: views.FormatMinutes(rem)},
+	}
+	return d, nil
+}
+
+// fetchSleepStages returns one session's stage timeline, positioned as
+// fractions of its own start..end span. sessionID always comes from a row
+// already scoped to the current user; watch_sleep_stage has no user_id of
+// its own (see schema.sql) since it's a pure child of that session.
+func fetchSleepStages(ctx context.Context, db *sql.DB, sessionID int64, start, end time.Time) ([]views.StageSegment, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT stage_type, start_time, end_time FROM watch_sleep_stage
 		WHERE sleep_session_id = ? ORDER BY start_time
@@ -789,46 +847,26 @@ func fetchSleepDetail(ctx context.Context, db *sql.DB, userID int64, day time.Ti
 	}
 	defer rows.Close()
 
-	d := &views.DetailData{Kind: "stages"}
-	start, errStart := time.Parse(time.RFC3339, startTime)
-	end, errEnd := time.Parse(time.RFC3339, endTime)
-	totalSpan := 1.0
-	if errStart == nil && errEnd == nil && end.After(start) {
-		totalSpan = end.Sub(start).Seconds()
-		d.RangeLabel = start.Local().Format("3:04 PM") + " – " + end.Local().Format("3:04 PM")
-	}
-
+	span := end.Sub(start).Seconds()
+	var out []views.StageSegment
 	for rows.Next() {
 		var stageType, segStartStr, segEndStr string
 		if err := rows.Scan(&stageType, &segStartStr, &segEndStr); err != nil {
 			return nil, fmt.Errorf("scanning watch_sleep_stage row: %w", err)
-		}
-		if errStart != nil {
-			continue
 		}
 		segStart, e1 := time.Parse(time.RFC3339, segStartStr)
 		segEnd, e2 := time.Parse(time.RFC3339, segEndStr)
 		if e1 != nil || e2 != nil {
 			continue
 		}
-		d.Stages = append(d.Stages, views.StageSegment{
+		out = append(out, views.StageSegment{
 			Type:      stageType,
-			StartPct:  segStart.Sub(start).Seconds() / totalSpan,
-			EndPct:    segEnd.Sub(start).Seconds() / totalSpan,
+			StartPct:  segStart.Sub(start).Seconds() / span,
+			EndPct:    segEnd.Sub(start).Seconds() / span,
 			TimeLabel: segStart.Local().Format("3:04 PM") + " – " + segEnd.Local().Format("3:04 PM"),
 		})
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	d.Stats = []views.StatItem{
-		{Label: "Awake", Value: views.FormatMinutes(minutesAwake.Int64)},
-		{Label: "Light", Value: views.FormatMinutes(minutesLight.Int64)},
-		{Label: "Deep", Value: views.FormatMinutes(minutesDeep.Int64)},
-		{Label: "REM", Value: views.FormatMinutes(minutesRem.Int64)},
-	}
-	return d, nil
+	return out, rows.Err()
 }
 
 func buildChart(day time.Time, history map[string]dashboardDailyRow, extract func(dashboardDailyRow) (float64, bool), goal *float64) *views.ChartData {
