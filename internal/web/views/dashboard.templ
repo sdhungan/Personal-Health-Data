@@ -324,8 +324,8 @@ templ detailTileBody(t TileData) {
 					if row.Label != "" {
 						<div class="tile-stat-sub">{ row.Label }</div>
 					}
-					if !row.Start.IsZero() {
-						@templ.Raw(renderHypnogramSVG(row.Stages, row.Start, row.End, chartInstanceID(fmt.Sprintf("%s_%d", t.ID, i))))
+					if len(row.Lanes) > 0 {
+						@templ.Raw(renderLaneChartSVG(row.Stages, row.Lanes, row.Start, row.End, chartInstanceID(fmt.Sprintf("%s_%d", t.ID, i))))
 					} else {
 						@templ.Raw(renderStageTimelineSVG(row.Stages, chartInstanceID(fmt.Sprintf("%s_%d", t.ID, i))))
 					}
@@ -369,15 +369,16 @@ func distinctStageTypes(stages []StageSegment) []string {
 			out = append(out, s.Type)
 		}
 	}
-	// Sleep stages follow the hypnogram's lane order (awake, REM, light,
-	// deep); anything else keeps first-seen order.
+	// Types with a lane follow their lane chart's top-to-bottom order;
+	// anything else keeps first-seen order.
+	known := append(slices.Clone(SleepLanes), ActivityLanes...)
 	lane := func(t string) int {
-		for i, l := range hypnogramLanes {
+		for i, l := range known {
 			if l.Type == t {
 				return i
 			}
 		}
-		return len(hypnogramLanes)
+		return len(known)
 	}
 	slices.SortStableFunc(out, func(a, b string) int { return lane(a) - lane(b) })
 	return out

@@ -38,6 +38,13 @@ func chartYLabelSpans(b *strings.Builder, axisMin, axisMax float64, y func(float
 // the label's position among the chart's labels; the first starts at its
 // position instead of centering on it (x-first), so it can't reach left into
 // the y-axis labels.
+// chartUnitLabel captions the y-axis with its unit, above the plot.
+func chartUnitLabel(b *strings.Builder, unit string) {
+	if unit != "" {
+		fmt.Fprintf(b, `<span class="chart-unit-label">%s</span>`, escapeSVGText(unit))
+	}
+}
+
 func chartXLabelSpan(b *strings.Builder, xpct float64, label string, ordinal int) {
 	class := "chart-x-label"
 	if ordinal == 0 {
@@ -114,12 +121,17 @@ func renderBarChartSVG(c ChartData, id string) string {
 		if i < len(c.Labels) {
 			label = c.Labels[i]
 		}
+		value := formatAxisNumber(v)
+		if i < len(c.ValueLabels) {
+			value = c.ValueLabels[i]
+		}
 		fmt.Fprintf(&b, `<rect x="%.2f" y="%.2f" width="%.2f" height="%.2f" class="chart-bar" %s/>`,
-			x, top, barW, bottom-top, hoverAttrs(id, x+barW/2, top, label, formatAxisNumber(v)))
+			x, top, barW, bottom-top, hoverAttrs(id, x+barW/2, top, label, value))
 	}
 	b.WriteString(`</svg>`)
 
 	chartYLabelSpans(&b, axisMin, axisMax, y)
+	chartUnitLabel(&b, c.Unit)
 	k := 0
 	for i, label := range c.Labels {
 		if label != "" {
@@ -203,6 +215,7 @@ func renderLineChartSVG(samples []HRSample, id, unit string) string {
 	}
 
 	chartYLabelSpans(&b, minV, maxV, y)
+	chartUnitLabel(&b, unit)
 	// Up to 5 evenly spaced time labels rather than one per sample (which
 	// for a few hundred intraday points would be illegible).
 	for i, k := 0, 0; i < n; i, k = i+max(n/5, 1), k+1 {
@@ -340,8 +353,9 @@ func renderSparklineSVG(values []float64) string {
 }
 
 // renderStageTimelineSVG renders a segmented horizontal bar — one rect per
-// sleep stage, colored by stage type via CSS (see style.css's .stage-*
-// classes) — a lightweight hypnogram, not a full sleep-chart library.
+// segment (e.g. each zone's share of the day's minutes), colored by type via
+// style.css's .stage-* classes. Segments over clock time use
+// renderLaneChartSVG instead.
 func renderStageTimelineSVG(stages []StageSegment, id string) string {
 	const width, height = 480, 36
 	if len(stages) == 0 {
@@ -367,49 +381,50 @@ func renderStageTimelineSVG(stages []StageSegment, id string) string {
 	return b.String()
 }
 
-// hypnogramLanes is each sleep stage's lane (y, as % of plot height), top
-// to bottom in Fitbit's order: awake, REM, light, deep.
-var hypnogramLanes = []struct {
-	Type string
-	Y    float64
-}{{"AWAKE", 8}, {"REM", 36}, {"LIGHT", 64}, {"DEEP", 92}}
+// Lane is one row of a lane chart: the segment Type drawn on it and the
+// name shown beside it.
+type Lane struct{ Type, Label string }
 
-func hypnogramLaneY(stageType string) (float64, bool) {
-	for _, l := range hypnogramLanes {
-		if l.Type == stageType {
-			return l.Y, true
-		}
-	}
-	return 0, false
-}
+// SleepLanes are a sleep session's lanes, top to bottom in Fitbit's order;
+// ActivityLanes run from most to least active, so effort reads as height.
+var (
+	SleepLanes    = []Lane{{"AWAKE", "AWAKE"}, {"REM", "REM"}, {"LIGHT", "LIGHT"}, {"DEEP", "DEEP"}}
+	ActivityLanes = []Lane{{"VERY_ACTIVE", "Very"}, {"MODERATELY_ACTIVE", "Moderate"}, {"LIGHTLY_ACTIVE", "Light"}, {"SEDENTARY", "Sedentary"}}
+)
 
-// renderHypnogramSVG draws one sleep session the way Fitbit's sleep log
-// does: a lane per stage, a thick rounded bar on the stage's lane for each
-// segment, a thin vertical connector at every stage change, lane names on
-// the left and 12-hour clock times along the bottom. Same plot frame and
-// hover tooltip as the other charts (chartOpen/hoverAttrs).
-func renderHypnogramSVG(stages []StageSegment, start, end time.Time, id string) string {
-	if len(stages) == 0 || !end.After(start) {
+// renderLaneChartSVG draws segments over time with a lane per segment type
+// (a sleep hypnogram, or the day's activity levels): a thick bar on its
+// lane for each segment, exactly as wide as it lasted, a thin vertical
+// connector at every change, lane names on the left and hour ticks along
+// the bottom (thinned to fit by static/chart-labels.js). Same plot frame
+// and hover tooltip as the other charts (chartOpen/hoverAttrs).
+func renderLaneChartSVG(stages []StageSegment, lanes []Lane, start, end time.Time, id string) string {
+	if len(stages) == 0 || len(lanes) == 0 || !end.After(start) {
 		return ""
 	}
+	laneY := map[string]float64{}
+	for i, l := range lanes {
+		laneY[l.Type] = 8 + 84*float64(i)/float64(max(len(lanes)-1, 1))
+	}
+
 	var b strings.Builder
-	fmt.Fprintf(&b, `<div class="chart-wrap hypnogram" data-signals="%s"><div class="chart-plot">`, escapeAttr(chartWrapSignals(id)))
+	fmt.Fprintf(&b, `<div class="chart-wrap lane-chart" data-signals="%s"><div class="chart-plot">`, escapeAttr(chartWrapSignals(id)))
 	b.WriteString(`<svg viewBox="0 0 100 100" class="chart-svg" preserveAspectRatio="none">`)
 
 	// Connectors go in first so the bars are drawn over their ends.
 	var bars strings.Builder
 	prevY, havePrev := 0.0, false
 	for _, s := range stages {
-		y, ok := hypnogramLaneY(s.Type)
+		y, ok := laneY[s.Type]
 		if !ok {
 			continue
 		}
 		x1, x2 := clampPct(s.StartPct)*100, clampPct(s.EndPct)*100
 		if havePrev && prevY != y {
-			fmt.Fprintf(&b, `<line x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f" class="hyp-connector"/>`, x1, prevY, x1, y)
+			fmt.Fprintf(&b, `<line x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f" class="lane-connector"/>`, x1, prevY, x1, y)
 		}
 		prevY, havePrev = y, true
-		fmt.Fprintf(&bars, `<line x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f" class="hyp-bar stage-%s"/>`, x1, y, x2, y, strings.ToLower(s.Type))
+		fmt.Fprintf(&bars, `<line x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f" class="lane-bar stage-%s"/>`, x1, y, x2, y, strings.ToLower(s.Type))
 		// Hover target: the segment's whole lane band — easier to hit than
 		// the bar itself, which can be a single minute wide.
 		fmt.Fprintf(&bars, `<rect x="%.2f" y="%.2f" width="%.2f" height="14" class="chart-hit-target" %s/>`,
@@ -418,15 +433,18 @@ func renderHypnogramSVG(stages []StageSegment, start, end time.Time, id string) 
 	b.WriteString(bars.String())
 	b.WriteString(`</svg>`)
 
-	for _, l := range hypnogramLanes {
-		fmt.Fprintf(&b, `<span class="chart-y-label" style="top:%.2f%%">%s</span>`, l.Y, l.Type)
+	for _, l := range lanes {
+		fmt.Fprintf(&b, `<span class="chart-y-label" style="top:%.2f%%">%s</span>`, laneY[l.Type], escapeSVGText(l.Label))
 	}
-	// A tick on every hour; narrow charts thin them out (chartXLabelSpan).
+	// A tick on every hour ("11 PM", "12 AM": unambiguous across a whole
+	// day); narrow charts thin them out.
 	span := end.Sub(start)
-	k := 0
-	for t := start.Local().Truncate(time.Hour).Add(time.Hour); t.Before(end); t = t.Add(time.Hour) {
-		chartXLabelSpan(&b, float64(t.Sub(start))/float64(span)*100, t.Format("3:04"), k)
-		k++
+	t := start.Truncate(time.Hour)
+	if t.Before(start) {
+		t = t.Add(time.Hour)
+	}
+	for k := 0; t.Before(end); t, k = t.Add(time.Hour), k+1 {
+		chartXLabelSpan(&b, float64(t.Sub(start))/float64(span)*100, t.Local().Format("3 PM"), k)
 	}
 	chartClose(&b, id)
 	return b.String()

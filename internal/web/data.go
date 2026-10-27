@@ -384,6 +384,7 @@ func buildStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileDa
 			return t, err
 		}
 		if chart := buildHourlyStepsChart(hourly); chart != nil {
+			labelChart(chart, def)
 			t.Chart = chart
 			t.ChartSubtext = fmt.Sprintf("Total today: %s steps", fmtInt(chart.Total))
 			t.Empty = false
@@ -427,9 +428,10 @@ func buildStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileDa
 		}
 	default:
 		if chart := buildChart(day, history, def.Extract, nil); chart != nil {
+			labelChart(chart, def)
 			t.Chart = chart
 			t.BigValue = def.Format(chart.Average)
-			t.ChartSubtext = fmt.Sprintf("%d-day average: %s", trendDays, t.BigValue)
+			t.ChartSubtext = fmt.Sprintf("%d-day average: %s", trendDays, withUnit(t.BigValue, def.Unit))
 			t.Empty = false
 		}
 	}
@@ -737,13 +739,14 @@ func buildActivityLevelSegmentTile(ctx context.Context, db *sql.DB, userID int64
 
 	dayStart := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
 	daySpan := 24 * time.Hour
-	d := &views.DetailData{Kind: "stages", StageRows: []views.StageRow{{Label: "00:00 – 23:59"}}}
+	d := &views.DetailData{Kind: "stages", StageRows: []views.StageRow{{Lanes: views.ActivityLanes, Start: dayStart, End: dayStart.Add(daySpan)}}}
 	for _, s := range segments {
 		d.StageRows[0].Stages = append(d.StageRows[0].Stages, views.StageSegment{
-			Type:      s.Level,
-			StartPct:  s.Start.Sub(dayStart).Seconds() / daySpan.Seconds(),
-			EndPct:    s.End.Sub(dayStart).Seconds() / daySpan.Seconds(),
-			TimeLabel: s.Start.Local().Format("15:04") + " – " + s.End.Local().Format("15:04"),
+			Type:     s.Level,
+			StartPct: s.Start.Sub(dayStart).Seconds() / daySpan.Seconds(),
+			EndPct:   s.End.Sub(dayStart).Seconds() / daySpan.Seconds(),
+			TimeLabel: s.Start.Local().Format("3:04 PM") + " – " + s.End.Local().Format("3:04 PM") +
+				" · " + views.FormatMinutes(int64(s.End.Sub(s.Start).Round(time.Minute).Minutes())),
 		})
 	}
 	for _, level := range []string{"SEDENTARY", "LIGHTLY_ACTIVE", "MODERATELY_ACTIVE", "VERY_ACTIVE"} {
@@ -820,7 +823,7 @@ func fetchSleepDetail(ctx context.Context, db *sql.DB, userID int64, day time.Ti
 		if err != nil {
 			return nil, err
 		}
-		d.StageRows = append(d.StageRows, views.StageRow{Label: label, Stages: stages, Start: s.start, End: s.end})
+		d.StageRows = append(d.StageRows, views.StageRow{Label: label, Stages: stages, Lanes: views.SleepLanes, Start: s.start, End: s.end})
 	}
 
 	d.Stats = []views.StatItem{
@@ -877,6 +880,23 @@ func fetchSleepStages(ctx context.Context, db *sql.DB, sessionID int64, start, e
 		})
 	}
 	return out, rows.Err()
+}
+
+// labelChart gives c the metric's unit (y-axis caption) and a tooltip
+// label per bar, formatted exactly like the tile's own big number.
+func labelChart(c *views.ChartData, def metricDef) {
+	c.Unit = def.Unit
+	for _, v := range c.Values {
+		c.ValueLabels = append(c.ValueLabels, withUnit(def.Format(v), def.Unit))
+	}
+}
+
+// withUnit appends unit to a formatted value, if it has one.
+func withUnit(value, unit string) string {
+	if unit == "" {
+		return value
+	}
+	return value + " " + unit
 }
 
 func buildChart(day time.Time, history map[string]dashboardDailyRow, extract func(dashboardDailyRow) (float64, bool), goal *float64) *views.ChartData {

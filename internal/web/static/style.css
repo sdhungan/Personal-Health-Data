@@ -601,37 +601,29 @@ body.tile-resizing { user-select: none; }
 
 .chart-wrap.stage-wrap { flex: none; display: block; min-height: 0; padding: 0; }
 .stage-timeline { height: 40px; border-radius: 6px; overflow: hidden; }
-.stage-seg { cursor: crosshair; }
-.stage-awake    { fill: var(--cat-activity); }
-.stage-light    { fill: var(--cat-respiratory); }
-.stage-deep     { fill: var(--cat-sleep); }
-.stage-rem      { fill: var(--cat-body); }
-.stage-moderate { fill: var(--cat-activity); }
-.stage-vigorous { fill: var(--cat-heart); }
-.stage-peak     { fill: var(--danger); }
+.stage-seg { cursor: crosshair; fill: var(--stage-color); }
+/* Each segment type sets its color once (--stage-color); flat bars
+   (.stage-seg), lane-chart bars (.lane-bar) and legend dots (.stage-dot)
+   all read it. */
+.stage-awake    { --stage-color: var(--cat-activity); }
+.stage-light    { --stage-color: var(--cat-respiratory); }
+.stage-deep     { --stage-color: var(--cat-sleep); }
+.stage-rem      { --stage-color: var(--cat-body); }
+.stage-moderate { --stage-color: var(--cat-activity); }
+.stage-vigorous { --stage-color: var(--cat-heart); }
+.stage-peak     { --stage-color: var(--danger); }
 
 /* Activity-level segments (watch_activity_level_segment) — an
    intensity ramp from resting gray up through red, distinct from the
    sleep-stage palette above since both can appear on the same page. */
-.stage-sedentary         { fill: var(--stage-sedentary); }
-.stage-lightly_active    { fill: var(--cat-respiratory); }
-.stage-moderately_active { fill: var(--cat-activity); }
-.stage-very_active       { fill: var(--cat-heart); }
+.stage-sedentary         { --stage-color: var(--stage-sedentary); }
+.stage-lightly_active    { --stage-color: var(--cat-respiratory); }
+.stage-moderately_active { --stage-color: var(--cat-activity); }
+.stage-very_active       { --stage-color: var(--cat-heart); }
 
 .stage-legend { display: flex; gap: 14px; margin-top: 8px; flex-wrap: wrap; }
 .stage-legend-item { display: flex; align-items: center; gap: 5px; font-size: 0.8rem; color: var(--text-dim); }
-.stage-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
-.stage-dot.stage-awake    { background: var(--cat-activity); }
-.stage-dot.stage-light    { background: var(--cat-respiratory); }
-.stage-dot.stage-deep     { background: var(--cat-sleep); }
-.stage-dot.stage-rem      { background: var(--cat-body); }
-.stage-dot.stage-moderate { background: var(--cat-activity); }
-.stage-dot.stage-vigorous { background: var(--cat-heart); }
-.stage-dot.stage-peak     { background: var(--danger); }
-.stage-dot.stage-sedentary         { background: var(--stage-sedentary); }
-.stage-dot.stage-lightly_active    { background: var(--cat-respiratory); }
-.stage-dot.stage-moderately_active { background: var(--cat-activity); }
-.stage-dot.stage-very_active       { background: var(--cat-heart); }
+.stage-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--stage-color); }
 
 /* ---- Activities / workouts list ---- */
 
@@ -914,20 +906,20 @@ body.tile-resizing { user-select: none; }
    leaves room for its x-axis labels. */
 .overlay-panel:has(.activity-map) #detail-panel > .chart-wrap { flex: 0 1 100px; min-height: 50px; margin-bottom: 20px; }
 
-/* Sleep hypnogram (chart.go's renderHypnogramSVG): Fitbit-style lanes with
-   thick rounded bars per stage and thin connectors between them. Wider left
-   gutter for the lane names. */
-.chart-wrap.hypnogram { flex: none; height: 190px; padding-left: 52px; margin-bottom: 12px; }
-.hypnogram .chart-plot { border-left: none; }
+/* Lane charts (chart.go's renderLaneChartSVG — sleep hypnogram, activity
+   levels): a bar per segment on its type's lane, thin connectors between
+   them. Wider left gutter for the lane names. */
+.chart-wrap.lane-chart { flex: none; height: 190px; padding-left: 66px; margin-bottom: 12px; }
+.lane-chart .chart-plot { border-left: none; }
 /* Flat ends: a bar spans exactly its stage's time, so a 2-minute stage
    stays 2 minutes wide instead of growing round caps into a blob. */
-.hyp-bar { stroke-width: 9px; stroke-linecap: butt; }
-.hyp-bar.stage-awake { stroke: var(--cat-activity); }
-.hyp-bar.stage-rem   { stroke: var(--cat-body); }
-.hyp-bar.stage-light { stroke: var(--cat-respiratory); }
-.hyp-bar.stage-deep  { stroke: var(--cat-sleep); }
-.hyp-connector { stroke: var(--text-dim); stroke-width: 1px; opacity: 0.45; }
+.lane-bar { stroke: var(--stage-color); stroke-width: 9px; stroke-linecap: butt; }
+.lane-connector { stroke: var(--text-dim); stroke-width: 1px; opacity: 0.45; }
 
 /* Content with a hard minimum width (tables) scrolls sideways inside its
    tile instead of drawing past it. */
 .tile-scroll-x { overflow-x: auto; max-width: 100%; }
+
+/* Y-axis unit caption (chart.go's chartUnitLabel), just above the plot. */
+.chart-wrap:has(.chart-unit-label) { padding-top: 22px; }
+.chart-unit-label { position: absolute; left: 0; top: -20px; font-size: 0.68rem; color: var(--text-dim); white-space: nowrap; pointer-events: none; }
