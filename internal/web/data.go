@@ -869,10 +869,11 @@ func fetchSleepStages(ctx context.Context, db *sql.DB, sessionID int64, start, e
 			continue
 		}
 		out = append(out, views.StageSegment{
-			Type:      stageType,
-			StartPct:  segStart.Sub(start).Seconds() / span,
-			EndPct:    segEnd.Sub(start).Seconds() / span,
-			TimeLabel: segStart.Local().Format("3:04 PM") + " – " + segEnd.Local().Format("3:04 PM"),
+			Type:     stageType,
+			StartPct: segStart.Sub(start).Seconds() / span,
+			EndPct:   segEnd.Sub(start).Seconds() / span,
+			TimeLabel: segStart.Local().Format("3:04 PM") + " – " + segEnd.Local().Format("3:04 PM") +
+				" · " + views.FormatMinutes(int64(segEnd.Sub(segStart).Round(time.Minute).Minutes())),
 		})
 	}
 	return out, rows.Err()
