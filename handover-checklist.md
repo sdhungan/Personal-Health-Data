@@ -32,8 +32,18 @@ changes it.
 - [x] Dry run on a copy of the live DB: 1,346,528 rows before/after, all
       INTEGER, 0 rows differing from the original string; ~7 s;
       220 MB -> 136 MB after VACUUM
-- [ ] Deploy (user runs the stop/backup/replace/start command as
-      Administrator); binary built at `bin/healthd.exe` from 0815e5a
+- [ ] Deploy (needs an elevated shell); binary built at `bin/healthd.exe`
+      from 0815e5a. Migration 10 runs by itself when the new binary opens
+      the DB. Stop, refresh the backup so it's the exact pre-migration
+      state, swap the binary, start:
+      ```powershell
+      Stop-Service healthDSafal; Get-Process healthd -ErrorAction SilentlyContinue | Wait-Process -Timeout 30; Copy-Item G:\HealthService\db\health.db.enc G:\HealthService\db\health.db.enc.bak-before-hr-int-timestamps-20261106 -Force; Copy-Item G:\HealthService\bin\healthd.exe G:\HealthService\bin\healthd.exe.bak -Force; Copy-Item G:\Repos\Personal-Health-Data\bin\healthd.exe G:\HealthService\bin\healthd.exe -Force; Start-Service healthDSafal; Start-Sleep 5; Get-Service healthDSafal; Get-Content G:\HealthService\logs\healthd.log -Tail 5
+      ```
+      Then verify on a COPY of `G:\HealthService\db\.health.db.work`
+      (plaintext while the service runs — delete the copy afterwards):
+      `PRAGMA user_version` = 10, 1,346,528+ rows in
+      `watch_heart_rate_intraday`, `typeof(recorded_at)` all 'integer'.
+      Then push the unpushed commits on `main`.
 - [ ] Verify live: service running, log shows no migration error, 1D
       heart-rate tile and an activity's heart-rate chart still render
 - [ ] **REVIEW (user):** confirm all is fine, then delete the backup
