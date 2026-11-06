@@ -261,6 +261,10 @@ func TestMigrateUpgradesFromBaselineAndRejectsOlder(t *testing.T) {
 		    user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE, recorded_at TEXT NOT NULL, bpm REAL NOT NULL,
 		    cached_at TEXT NOT NULL DEFAULT (strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', 'now')), PRIMARY KEY (user_id, recorded_at));
 		INSERT INTO watch_heart_rate_intraday (user_id, recorded_at, bpm, cached_at) VALUES (1, '2026-08-05T20:02:25Z', 61, 'c');
+		INSERT INTO watch_sleep_session (user_id, day, start_time, end_time) VALUES (1, '2026-08-05', 's', 'e');
+		INSERT INTO sync_state (user_id, source, day, status) VALUES
+		    (1, 'google_health', '2026-08-05', 'complete'), (1, 'google_health', '2026-08-06', 'complete'),
+		    (1, 'cronometer', '2026-08-06', 'complete');
 		PRAGMA user_version = %d`, migrationBase)); err != nil {
 		t.Fatal(err)
 	}
@@ -288,6 +292,13 @@ func TestMigrateUpgradesFromBaselineAndRejectsOlder(t *testing.T) {
 	}
 	if !strings.Contains(hrSQL, "WITHOUT ROWID") || strings.Contains(hrSQL, "cached_at") {
 		t.Errorf("migrated heart-rate table should be WITHOUT ROWID with no cached_at:\n%s", hrSQL)
+	}
+	var reopened string
+	if err := conn.QueryRow(`SELECT group_concat(source || ' ' || day) FROM sync_state WHERE status = 'pending'`).Scan(&reopened); err != nil {
+		t.Fatal(err)
+	}
+	if reopened != "google_health 2026-08-06" {
+		t.Errorf("re-opened days = %q, want only the Google day without sleep", reopened)
 	}
 	var free int
 	if err := conn.QueryRow(`PRAGMA freelist_count`).Scan(&free); err != nil || free != 0 {

@@ -308,10 +308,7 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 	// ---- Sleep duration, from the same sleep sessions synced separately ----
 	// Keyed by wake-up day, same as syncSleep.
 	g.Go(func() (err error) {
-		sleeps, err = fetchUnfilteredForDay[Sleep](gctx, s.Client, "sleep", day, func(v Sleep) (time.Time, bool) {
-			t, err := v.Interval.End()
-			return t, err == nil
-		})
+		sleeps, err = fetchSleepForDay(gctx, s.Client, day)
 		return err
 	})
 
@@ -516,6 +513,20 @@ func fetchSamplePoints[T any](ctx context.Context, client *Client, dataTypeName 
 		return nil, fmt.Errorf("decoding %s: %w", dataTypeName, err)
 	}
 	return points, nil
+}
+
+// fetchSleepForDay fetches the sleep sessions that end on day, filtered
+// server-side (see sleepDayFilter).
+func fetchSleepForDay(ctx context.Context, client *Client, day time.Time) ([]Sleep, error) {
+	raw, err := client.ListDataPoints(ctx, "sleep", sleepDayFilter(day), 100)
+	if err != nil {
+		return nil, fmt.Errorf("listing sleep: %w", err)
+	}
+	sessions, err := ExtractValues[Sleep](raw, ValueKey("sleep"))
+	if err != nil {
+		return nil, fmt.Errorf("decoding sleep: %w", err)
+	}
+	return sessions, nil
 }
 
 // fetchUnfilteredForDay fetches a session-kind data type unfiltered (see

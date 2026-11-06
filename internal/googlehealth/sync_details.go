@@ -19,10 +19,7 @@ import (
 // of the day (by time in the sleep period) is flagged is_main_sleep —
 // Google's API doesn't mark this itself, unlike Fitbit's own app.
 func (s *DBSyncer) syncSleep(ctx context.Context, day time.Time) (bool, error) {
-	sessions, err := fetchUnfilteredForDay[Sleep](ctx, s.Client, "sleep", day, func(v Sleep) (time.Time, bool) {
-		t, err := v.Interval.End()
-		return t, err == nil
-	})
+	sessions, err := fetchSleepForDay(ctx, s.Client, day)
 	if err != nil {
 		return false, err
 	}

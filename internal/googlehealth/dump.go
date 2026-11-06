@@ -29,7 +29,10 @@ import (
 //     list() unfiltered returns recent history by default (confirmed for
 //     exercise, sleep, electrocardiogram, irregular-rhythm-notification),
 //     and callers trim to the desired day client-side — the same approach
-//     that already works for kindDailyAggregate.
+//     that already works for kindDailyAggregate. That "recent history" is
+//     only the newest page, though, so the sync filters sleep on
+//     interval.end_time instead (see sleepDayFilter); this diagnostic dump
+//     only ever looks at today, where unfiltered is fine.
 func filterFor(dt dataType, start, end time.Time) string {
 	startStr := start.UTC().Format(time.RFC3339)
 	endStr := end.UTC().Format(time.RFC3339)

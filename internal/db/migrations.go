@@ -48,6 +48,16 @@ var Migrations = []string{
 	    SELECT user_id, recorded_at, bpm FROM watch_heart_rate_intraday;
 	DROP TABLE watch_heart_rate_intraday;
 	ALTER TABLE watch_heart_rate_intraday_new RENAME TO watch_heart_rate_intraday;`,
+
+	// Sleep was fetched with an unfiltered list() that only returns the
+	// newest page, so after the wake-up-day re-file only recent sleep came
+	// back. The sync now filters by end time; re-open every resolved Google
+	// day with no sleep session so the scheduler re-syncs it. Days that
+	// truly had no sleep just resolve again.
+	`UPDATE sync_state SET status = 'pending'
+	WHERE source = 'google_health' AND status IN ('complete', 'missing')
+	  AND NOT EXISTS (SELECT 1 FROM watch_sleep_session s
+	                  WHERE s.user_id = sync_state.user_id AND s.day = sync_state.day)`,
 }
 
 // migrationBase is the version every database had reached when its earlier
