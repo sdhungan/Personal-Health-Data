@@ -103,7 +103,7 @@ Every `watch_*` table (the Google Health side of the schema) follows one of five
 
 1. **DailyScalar** — one column in `watch_daily_summary`, one row per day (steps, calories, resting HR, ...). `raw_payload` on that table keeps the full JSON response for the day so a first-pass column set can't silently lose data — future columns can be backfilled from it without re-hitting the API.
 2. **DailyByCategory** — day + enum-category breakdown (`watch_active_minutes_by_level`, `watch_heart_rate_zone_minutes`, ...) — e.g. minutes per heart-rate zone, not just a daily total.
-3. **Hourly** — day + hour buckets (`watch_steps_hourly`) — coarser than raw samples, finer than a daily total.
+3. **Hourly** — day + hour buckets (`watch_activity_hourly`) — coarser than raw samples, finer than a daily total.
 4. **Timeline** — exact-timestamp samples (`watch_heart_rate_intraday`, `watch_blood_glucose_sample`, ...) — kept granular because *when* it happened matters (heart rate during exercise, glucose after a meal). The sync job always computes that day's avg/min/max from the same fetch straight into `watch_daily_summary`, rather than issuing a separate simplified query later.
 5. **SegmentTimeline** — start/end spans through the day (`watch_sleep_stage`, `watch_activity_level_segment`) — for metrics whose *shape across the day* is the point, not a total.
 

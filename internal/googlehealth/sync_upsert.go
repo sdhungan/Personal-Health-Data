@@ -197,20 +197,32 @@ func (s *DBSyncer) upsertHeartRateZoneDefinitions(ctx context.Context, day strin
 	return tx.Commit()
 }
 
-// upsertHourlySteps upserts day's watch_steps_hourly buckets.
-func (s *DBSyncer) upsertHourlySteps(ctx context.Context, rows []healthdata.HourlySteps) error {
+// replaceHourlyActivity replaces day's watch_activity_hourly rows with
+// rows, in one transaction. Replace, not merge: an hour Google no longer
+// returns (e.g. one that only had phone data before the watch-only switch)
+// must not keep its old values. Only called after every hourly fetch for
+// the day succeeded, so rows is the complete picture.
+func (s *DBSyncer) replaceHourlyActivity(ctx context.Context, day string, rows []healthdata.HourlyActivity) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning watch_activity_hourly replace: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM watch_activity_hourly WHERE user_id = ? AND day = ?`, s.UserID, day); err != nil {
+		return fmt.Errorf("clearing watch_activity_hourly for %s: %w", day, err)
+	}
 	for _, r := range rows {
-		if _, err := s.DB.ExecContext(ctx, `
-			INSERT INTO watch_steps_hourly (user_id, day, hour, steps, distance_m, calories) VALUES (?, ?, ?, ?, ?, ?)
-			ON CONFLICT(user_id, day, hour) DO UPDATE SET
-				steps      = COALESCE(excluded.steps, watch_steps_hourly.steps),
-				distance_m = COALESCE(excluded.distance_m, watch_steps_hourly.distance_m),
-				calories   = COALESCE(excluded.calories, watch_steps_hourly.calories)
-		`, s.UserID, r.Day, r.Hour, r.Steps, r.DistanceM, r.Calories); err != nil {
-			return fmt.Errorf("upserting watch_steps_hourly: %w", err)
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO watch_activity_hourly (user_id, day, hour, steps, distance_m, calories, active_energy_kcal,
+				altitude_gain_m, floors, sedentary_minutes, active_minutes_light, active_minutes_moderate, active_minutes_vigorous)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, s.UserID, r.Day, r.Hour, r.Steps, r.DistanceM, r.Calories, r.ActiveEnergyKcal,
+			r.AltitudeGainM, r.Floors, r.SedentaryMinutes, r.ActiveMinutesLight, r.ActiveMinutesModerate, r.ActiveMinutesVigorous); err != nil {
+			return fmt.Errorf("inserting watch_activity_hourly: %w", err)
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // upsertHeartRateSamples stores the day's raw heart-rate samples into

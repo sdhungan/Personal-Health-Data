@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/sdhungan/Personal-Health-Data/internal/healthdata"
 )
@@ -285,7 +288,7 @@ func (s *DBSyncer) syncCaloriesByZone(ctx context.Context, day time.Time) (bool,
 // syncActiveMinutesByLevel upserts the day's active minutes broken down by
 // activity level (LIGHT/MODERATE/VIGOROUS), and returns the grand total for
 // watch_daily_summary.active_minutes (a denormalized convenience column,
-// same relationship steps_total has to watch_steps_hourly).
+// same relationship steps_total has to watch_activity_hourly).
 func (s *DBSyncer) syncActiveMinutesByLevel(ctx context.Context, day time.Time) (bool, *int64, error) {
 	points, err := fetchIntervalPoints[ActiveMinutes](ctx, s.Client, "active-minutes", day)
 	if err != nil {
@@ -551,29 +554,158 @@ func dedupedHourlySteps(points []SourcedValue[Steps]) map[int]int64 {
 	return hourly
 }
 
-// syncStepsHourly buckets the day's step intervals by local hour into
-// watch_steps_hourly.
-func (s *DBSyncer) syncStepsHourly(ctx context.Context, day time.Time) (bool, error) {
-	points, err := fetchIntervalPointsWithSource[Steps](ctx, s.Client, "steps", day)
-	if err != nil {
+// syncActivityHourly fills watch_activity_hourly for day: steps from the
+// day's step intervals (dedupedHourlySteps, same as steps_total), every
+// other column from an hourly rollUp per data type.
+func (s *DBSyncer) syncActivityHourly(ctx context.Context, day time.Time) (bool, error) {
+	dayStr := dayKey(day)
+	rows := map[int]*healthdata.HourlyActivity{}
+	row := func(hour int) *healthdata.HourlyActivity {
+		if rows[hour] == nil {
+			rows[hour] = &healthdata.HourlyActivity{Day: dayStr, Hour: hour}
+		}
+		return rows[hour]
+	}
+
+	var mu sync.Mutex // every fetch below writes into rows
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		points, err := fetchIntervalPointsWithSource[Steps](gctx, s.Client, "steps", day)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		for hour, steps := range dedupedHourlySteps(points) {
+			addTo(&row(hour).Steps, steps)
+		}
+		return nil
+	})
+	hourlyRollup(g, gctx, s.Client, "distance", day, &mu, row, func(r *healthdata.HourlyActivity, v DistanceRollup) {
+		addTo(&r.DistanceM, float64(v.MillimetersSum)/1000)
+	})
+	hourlyRollup(g, gctx, s.Client, "total-calories", day, &mu, row, func(r *healthdata.HourlyActivity, v TotalCaloriesRollup) {
+		addTo(&r.Calories, float64(v.KcalSum))
+	})
+	hourlyRollup(g, gctx, s.Client, "active-energy-burned", day, &mu, row, func(r *healthdata.HourlyActivity, v ActiveEnergyBurnedRollup) {
+		addTo(&r.ActiveEnergyKcal, float64(v.KcalSum))
+	})
+	hourlyRollup(g, gctx, s.Client, "altitude", day, &mu, row, func(r *healthdata.HourlyActivity, v AltitudeRollup) {
+		addTo(&r.AltitudeGainM, float64(v.GainMillimetersSum)/1000)
+	})
+	hourlyRollup(g, gctx, s.Client, "floors", day, &mu, row, func(r *healthdata.HourlyActivity, v FloorsRollup) {
+		addTo(&r.Floors, int64(v.CountSum))
+	})
+	// Sedentary comes as multi-hour periods, and the hourly rollUp files a
+	// whole period under the hour it starts in (2026-11-06: 123 min "in"
+	// 09:00). Split each period across the hours it covers instead. The
+	// watch is the only source of this type (platform FITBIT, derived).
+	g.Go(func() error {
+		periods, err := fetchIntervalPoints[SedentaryPeriod](gctx, s.Client, "sedentary-period", day)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		for _, p := range periods {
+			for hour, minutes := range splitByLocalHour(p.Interval, day) {
+				addTo(&row(hour).SedentaryMinutes, minutes)
+			}
+		}
+		return nil
+	})
+	hourlyRollup(g, gctx, s.Client, "active-minutes", day, &mu, row, func(r *healthdata.HourlyActivity, v ActiveMinutesRollup) {
+		for _, l := range v.ByLevel {
+			switch l.ActivityLevel {
+			case "LIGHT":
+				addTo(&r.ActiveMinutesLight, int64(l.ActiveMinutesSum))
+			case "MODERATE":
+				addTo(&r.ActiveMinutesModerate, int64(l.ActiveMinutesSum))
+			case "VIGOROUS":
+				addTo(&r.ActiveMinutesVigorous, int64(l.ActiveMinutesSum))
+			}
+		}
+	})
+	if err := g.Wait(); err != nil {
 		return false, err
 	}
-	if len(points) == 0 {
+	if len(rows) == 0 {
 		return false, nil
 	}
 
-	hourly := dedupedHourlySteps(points)
-
-	dayStr := dayKey(day)
-	rows := make([]healthdata.HourlySteps, 0, len(hourly))
-	for hour, steps := range hourly {
-		steps := steps
-		rows = append(rows, healthdata.HourlySteps{Day: dayStr, Hour: hour, Steps: &steps})
+	out := make([]healthdata.HourlyActivity, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, *r)
 	}
-	if err := s.upsertHourlySteps(ctx, rows); err != nil {
+	if err := s.replaceHourlyActivity(ctx, dayStr, out); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// splitByLocalHour returns the minutes of iv falling in each local hour of
+// day. The part outside day is dropped.
+// ponytail: periods are fetched by start time, so one starting the evening
+// before and running past midnight loses its after-midnight part; the daily
+// total has the same boundary.
+func splitByLocalHour(iv ObservationTimeInterval, day time.Time) map[int]float64 {
+	start, err1 := iv.Start()
+	end, err2 := iv.End()
+	if err1 != nil || err2 != nil {
+		return nil
+	}
+	dayStart, dayEnd := dayBounds(day)
+	if start.Before(dayStart) {
+		start = dayStart
+	}
+	if end.After(dayEnd) {
+		end = dayEnd
+	}
+	out := map[int]float64{}
+	for t := start.In(time.Local); t.Before(end); {
+		next := time.Date(t.Year(), t.Month(), t.Day(), t.Hour()+1, 0, 0, 0, time.Local)
+		if next.After(end) {
+			next = end
+		}
+		out[t.Hour()] += next.Sub(t).Minutes()
+		t = next
+	}
+	return out
+}
+
+// addTo adds v to *p, allocating it on first use. Adding rather than
+// assigning makes a repeated local hour (the DST fall-back day) sum up.
+func addTo[N int64 | float64](p **N, v N) {
+	if *p == nil {
+		*p = new(N)
+	}
+	**p += v
+}
+
+// hourlyRollup fetches dataTypeName's hourly rollUp windows for day on g and
+// applies each to the row for its local hour. Windows are UTC-hour aligned,
+// which maps 1:1 onto local hours for whole-hour UTC offsets.
+// ponytail: a half-hour-offset timezone would file each window under one
+// local hour; split windows if that ever matters.
+func hourlyRollup[T any](g *errgroup.Group, ctx context.Context, client *Client, dataTypeName string, day time.Time,
+	mu *sync.Mutex, row func(int) *healthdata.HourlyActivity, apply func(*healthdata.HourlyActivity, T)) {
+	g.Go(func() error {
+		start, end := dayBounds(day)
+		raw, err := client.RollUp(ctx, dataTypeName, start, end, "3600s")
+		if err != nil {
+			return fmt.Errorf("%s hourly rollUp: %w", dataTypeName, err)
+		}
+		points, err := ExtractRollupValues[T](raw, ValueKey(dataTypeName))
+		if err != nil {
+			return fmt.Errorf("decoding %s hourly rollUp: %w", dataTypeName, err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		for _, p := range points {
+			apply(row(p.Start.In(time.Local).Hour()), p.Value)
+		}
+		return nil
+	})
 }
 
 // syncHeartRateIntraday fetches the day's raw heart-rate samples once,

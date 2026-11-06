@@ -262,6 +262,12 @@ func TestMigrateUpgradesFromBaselineAndRejectsOlder(t *testing.T) {
 		    cached_at TEXT NOT NULL DEFAULT (strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', 'now')), PRIMARY KEY (user_id, recorded_at));
 		INSERT INTO watch_heart_rate_intraday (user_id, recorded_at, bpm, cached_at) VALUES (1, '2026-08-05T20:02:25Z', 61, 'c');
 		INSERT INTO watch_sleep_session (user_id, day, start_time, end_time) VALUES (1, '2026-08-05', 's', 'e');
+		DROP TABLE watch_activity_hourly;
+		CREATE TABLE watch_steps_hourly (
+		    user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE, day TEXT NOT NULL,
+		    hour INTEGER NOT NULL CHECK (hour BETWEEN 0 AND 23), steps INTEGER, distance_m REAL, calories REAL,
+		    PRIMARY KEY (user_id, day, hour));
+		INSERT INTO watch_steps_hourly (user_id, day, hour, steps) VALUES (1, '2026-08-05', 9, 42);
 		INSERT INTO sync_state (user_id, source, day, status) VALUES
 		    (1, 'google_health', '2026-08-05', 'complete'), (1, 'google_health', '2026-08-06', 'complete'),
 		    (1, 'cronometer', '2026-08-06', 'complete');
@@ -294,11 +300,20 @@ func TestMigrateUpgradesFromBaselineAndRejectsOlder(t *testing.T) {
 		t.Errorf("migrated heart-rate table should be WITHOUT ROWID with no cached_at:\n%s", hrSQL)
 	}
 	var reopened string
-	if err := conn.QueryRow(`SELECT group_concat(source || ' ' || day) FROM sync_state WHERE status = 'pending'`).Scan(&reopened); err != nil {
+	if err := conn.QueryRow(`SELECT group_concat(d) FROM (SELECT source || ' ' || day AS d FROM sync_state WHERE status = 'pending' ORDER BY d)`).Scan(&reopened); err != nil {
 		t.Fatal(err)
 	}
-	if reopened != "google_health 2026-08-06" {
-		t.Errorf("re-opened days = %q, want only the Google day without sleep", reopened)
+	// Migration 14 re-opens every Google day for the hourly backfill
+	// (12's sleep-only re-open is a subset of it); Cronometer is untouched.
+	if reopened != "google_health 2026-08-05,google_health 2026-08-06" {
+		t.Errorf("re-opened days = %q, want both Google days only", reopened)
+	}
+	var steps int64
+	if err := conn.QueryRow(`SELECT steps FROM watch_activity_hourly WHERE day = '2026-08-05' AND hour = 9`).Scan(&steps); err != nil || steps != 42 {
+		t.Errorf("hourly steps row after rename = %d (err %v), want 42", steps, err)
+	}
+	if _, err := conn.Exec(`UPDATE watch_activity_hourly SET floors = 1, sedentary_minutes = 2, active_minutes_vigorous = 3`); err != nil {
+		t.Errorf("new hourly columns missing after migrate: %v", err)
 	}
 	if _, err := conn.Exec(`INSERT INTO watch_sleep_stage (sleep_session_id, stage_type, start_time, end_time)
 		SELECT id, 'ASLEEP', 's', 'e' FROM watch_sleep_session`); err != nil {

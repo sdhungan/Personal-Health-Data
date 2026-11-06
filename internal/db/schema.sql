@@ -123,7 +123,7 @@ CREATE TABLE sync_state (
 --   2. DailyByCategory -- day+enum-category breakdown (watch_*_by_zone,
 --                         watch_*_by_level tables) -- e.g. minutes per
 --                         heart-rate zone, not just a daily total.
---   3. Hourly           -- day+hour buckets (watch_steps_hourly) -- coarser
+--   3. Hourly           -- day+hour buckets (watch_activity_hourly) -- coarser
 --                         than raw, finer than a daily total.
 --   4. Timeline          -- exact-timestamp samples (watch_*_sample /
 --                         watch_heart_rate_intraday) -- kept granular
@@ -162,7 +162,7 @@ CREATE TABLE watch_daily_summary (
     -- Grand total; the light/moderate/vigorous breakdown lives in
     -- watch_active_minutes_by_level (DailyByCategory) -- kept here too as a
     -- denormalized convenience column, same relationship steps_total has to
-    -- watch_steps_hourly.
+    -- watch_activity_hourly.
     active_minutes            INTEGER,
     kcal_burned_google        REAL,
     active_energy_burned_kcal REAL,
@@ -218,15 +218,26 @@ CREATE TABLE watch_active_zone_minutes_by_zone (
     PRIMARY KEY (user_id, day, zone_type)
 );
 
--- Hourly: step buckets. Low volume (24 rows/day) so, unlike heart rate,
--- it's kept in full permanently rather than as a prunable cache.
-CREATE TABLE watch_steps_hourly (
-    user_id   INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
-    day       TEXT NOT NULL,
-    hour      INTEGER NOT NULL CHECK (hour BETWEEN 0 AND 23),
-    steps     INTEGER,
-    distance_m REAL,
-    calories  REAL,
+-- Hourly: per-local-hour activity buckets (at most 24 rows/day), the hourly
+-- breakdown of watch_daily_summary's activity totals. steps comes from the
+-- step intervals (same dedupe as steps_total); every other column from
+-- Google's hourly rollUp, whose hours sum exactly to the daily rollup. A
+-- row exists for an hour with any data; a NULL column means no data for
+-- that metric that hour (i.e. zero).
+CREATE TABLE watch_activity_hourly (
+    user_id                 INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    day                     TEXT NOT NULL,
+    hour                    INTEGER NOT NULL CHECK (hour BETWEEN 0 AND 23),
+    steps                   INTEGER,
+    distance_m              REAL,
+    calories                REAL,  -- total burned, BMR included
+    active_energy_kcal      REAL,
+    altitude_gain_m         REAL,
+    floors                  INTEGER,
+    sedentary_minutes       REAL,
+    active_minutes_light    INTEGER,
+    active_minutes_moderate INTEGER,
+    active_minutes_vigorous INTEGER,
     PRIMARY KEY (user_id, day, hour)
 );
 

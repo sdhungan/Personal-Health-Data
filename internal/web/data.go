@@ -495,19 +495,19 @@ func localDayRangeUnix(day time.Time) (start, end int64) {
 }
 
 // fetchStepsHourly returns steps bucketed by local hour (0-23) for day, from
-// watch_steps_hourly.
+// watch_activity_hourly.
 func fetchStepsHourly(ctx context.Context, db *sql.DB, userID int64, day time.Time) ([24]int64, error) {
 	var hours [24]int64
-	rows, err := db.QueryContext(ctx, `SELECT hour, steps FROM watch_steps_hourly WHERE user_id = ? AND day = ?`, userID, day.Format(dateLayout))
+	rows, err := db.QueryContext(ctx, `SELECT hour, steps FROM watch_activity_hourly WHERE user_id = ? AND day = ?`, userID, day.Format(dateLayout))
 	if err != nil {
-		return hours, fmt.Errorf("querying watch_steps_hourly for %s: %w", day.Format(dateLayout), err)
+		return hours, fmt.Errorf("querying watch_activity_hourly for %s: %w", day.Format(dateLayout), err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var hour int
 		var steps sql.NullInt64
 		if err := rows.Scan(&hour, &steps); err != nil {
-			return hours, fmt.Errorf("scanning watch_steps_hourly row: %w", err)
+			return hours, fmt.Errorf("scanning watch_activity_hourly row: %w", err)
 		}
 		if hour >= 0 && hour < 24 {
 			hours[hour] = steps.Int64

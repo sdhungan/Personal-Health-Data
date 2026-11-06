@@ -3,6 +3,7 @@ package googlehealth
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // listEnvelope is the outer shape every list() response shares: an
@@ -81,10 +82,12 @@ type rollupEnvelope struct {
 	RollupDataPoints []map[string]json.RawMessage `json:"rollupDataPoints"`
 }
 
-// RollupPoint pairs a dailyRollUp value with the civil day range it covers.
+// RollupPoint pairs a rollup value with the range it covers: civil dates
+// for dailyRollUp, an absolute Start for rollUp windows.
 type RollupPoint[T any] struct {
 	CivilStart Date
 	CivilEnd   Date
+	Start      time.Time
 	Value      T
 }
 
@@ -101,6 +104,11 @@ func ExtractRollupValues[T any](raw json.RawMessage, key string) ([]RollupPoint[
 	for _, point := range env.RollupDataPoints {
 		var rp RollupPoint[T]
 
+		if startRaw, ok := point["startTime"]; ok {
+			if err := json.Unmarshal(startRaw, &rp.Start); err != nil {
+				return nil, fmt.Errorf("decoding startTime: %w", err)
+			}
+		}
 		if startRaw, ok := point["civilStartTime"]; ok {
 			var cdt CivilDateTime
 			if err := json.Unmarshal(startRaw, &cdt); err != nil {

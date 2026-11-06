@@ -431,21 +431,15 @@ docs described. A few things worth knowing before touching this code again:
 
 ## Still-open, deliberately-not-fixed gaps
 
-- `watch_steps_hourly.distance_m`/`.calories` columns exist in `schema.sql`
-  and the upsert SQL (`upsertHourlySteps` in
-  `internal/googlehealth/sync_upsert.go`) writes them, but the fetch side
-  (`internal/googlehealth/sync_details.go`, the hourly-steps sync function)
-  only ever populates `healthdata.HourlySteps.Steps` — `DistanceM`/`Calories`
-  are never set, so those two columns stay NULL for every row. Any hourly
-  distance/calories view is not currently buildable from real data; only
-  hourly *steps* has actual data behind it.
-- `FloorsRollup`'s field shape (`internal/googlehealth/values.go`) is still
-  an unconfirmed best-effort guess by symmetry with `TotalCaloriesRollup` —
-  this account's own floors rollup response has always come back empty, so
-  there's never been a real non-empty response to verify the shape against.
-  Safe if wrong (`ExtractRollupValues` just finds no points rather than
-  silently decoding the wrong field), but verify against a real response if
-  you ever get one.
+- Resolved 2026-11-06: hourly activity (`watch_activity_hourly`, formerly
+  `watch_steps_hourly`, whose distance/calories columns were never written)
+  is now filled from `dataPoints:rollUp` with `windowSize: "3600s"` for
+  distance, total-calories, active-energy-burned, altitude, floors,
+  sedentary-period and active-minutes. Confirmed against the real API: the
+  hourly windows sum exactly to `dailyRollUp` (so already deduplicated
+  across watch + phone), hours with no data are omitted, and floors' real
+  shape is `{"floors":{"countSum":"2"}}`. Raw `list()` is per-minute for
+  most of these, but floors and total-calories reject `list()` outright.
 - Three Cronometer fields are structurally present but never populated,
   confirmed against real account data, not guessed: `cronometer_serving.category`
   (Cronometer's `food.Category` is a numeric ID with no confirmed name

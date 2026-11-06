@@ -26,7 +26,7 @@ func TestSchemaExecutes(t *testing.T) {
 		"user_profile",
 		"sync_state",
 		"watch_daily_summary",
-		"watch_steps_hourly",
+		"watch_activity_hourly",
 		"watch_heart_rate_intraday",
 		"watch_sleep_session",
 		"watch_sleep_stage",

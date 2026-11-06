@@ -132,7 +132,7 @@ func isUniqueConstraintErr(err error) bool {
 var userDataTables = []string{
 	"web_session", "user_profile", "sync_state",
 	"watch_daily_summary", "watch_active_minutes_by_level", "watch_active_zone_minutes_by_zone",
-	"watch_steps_hourly", "watch_heart_rate_intraday", "watch_blood_glucose_sample",
+	"watch_activity_hourly", "watch_heart_rate_intraday", "watch_blood_glucose_sample",
 	"watch_core_body_temperature_sample", "watch_activity_level_segment",
 	"watch_exercise_session", "watch_ecg_reading",
 	"watch_heart_rate_zone_definition", "watch_heart_rate_zone_minutes", "watch_calories_by_zone",

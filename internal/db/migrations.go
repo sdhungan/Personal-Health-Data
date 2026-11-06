@@ -72,6 +72,20 @@ var Migrations = []string{
 	DROP TABLE watch_sleep_stage;
 	ALTER TABLE watch_sleep_stage_new RENAME TO watch_sleep_stage;
 	CREATE INDEX idx_watch_sleep_stage_session ON watch_sleep_stage (sleep_session_id);`,
+
+	// watch_steps_hourly -> watch_activity_hourly: hourly breakdowns of the
+	// daily activity totals (distance/calories columns existed but were
+	// never written). Re-open every resolved Google day so the scheduler
+	// backfills them.
+	`ALTER TABLE watch_steps_hourly RENAME TO watch_activity_hourly;
+	ALTER TABLE watch_activity_hourly ADD COLUMN active_energy_kcal REAL;
+	ALTER TABLE watch_activity_hourly ADD COLUMN altitude_gain_m REAL;
+	ALTER TABLE watch_activity_hourly ADD COLUMN floors INTEGER;
+	ALTER TABLE watch_activity_hourly ADD COLUMN sedentary_minutes REAL;
+	ALTER TABLE watch_activity_hourly ADD COLUMN active_minutes_light INTEGER;
+	ALTER TABLE watch_activity_hourly ADD COLUMN active_minutes_moderate INTEGER;
+	ALTER TABLE watch_activity_hourly ADD COLUMN active_minutes_vigorous INTEGER;
+	UPDATE sync_state SET status = 'pending' WHERE source = 'google_health' AND status IN ('complete', 'missing');`,
 }
 
 // migrationBase is the version every database had reached when its earlier

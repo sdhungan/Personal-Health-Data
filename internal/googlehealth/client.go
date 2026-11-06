@@ -62,6 +62,23 @@ func (c *Client) ListDataPoints(ctx context.Context, dataType, filter string, pa
 	return c.do(ctx, http.MethodGet, u, nil)
 }
 
+// RollUp calls POST .../dataTypes/{dataType}/dataPoints:rollUp: values
+// summed into fixed windows (e.g. "3600s") over [start, end), deduplicated
+// across sources the same way dailyRollUp is (CONFIRMED 2026-11-06: 24
+// hourly windows summed to exactly the dailyRollUp value for all 8 types
+// synced hourly). Windows with no data are omitted.
+func (c *Client) RollUp(ctx context.Context, dataType string, start, end time.Time, window string) (json.RawMessage, error) {
+	u := fmt.Sprintf("%s/users/me/dataTypes/%s/dataPoints:rollUp", BaseURL, dataType)
+	body, err := json.Marshal(map[string]any{
+		"range":      map[string]string{"startTime": start.UTC().Format(time.RFC3339), "endTime": end.UTC().Format(time.RFC3339)},
+		"windowSize": window,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshaling rollUp request body: %w", err)
+	}
+	return c.do(ctx, http.MethodPost, u, bytes.NewReader(body))
+}
+
 // DailyRollUp calls POST .../dataTypes/{dataType}/dataPoints:dailyRollUp
 // for the given CivilDateTime range.
 func (c *Client) DailyRollUp(ctx context.Context, dataType string, start, end CivilDateTime) (json.RawMessage, error) {

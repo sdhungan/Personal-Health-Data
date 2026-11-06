@@ -128,17 +128,21 @@ type HeartRateZoneDefinition struct {
 	MaxBpm   int64
 }
 
-// HourlySteps is one (day, hour) bucket — Hourly shape, mirrors
-// watch_steps_hourly. DistanceM/Calories are schema columns that exist but
-// currently always come back NULL for every account tested so far (see
-// prerequisite.md) — kept here so a future confirmed source can populate
-// them without a struct change.
-type HourlySteps struct {
-	Day       string
-	Hour      int
-	Steps     *int64
-	DistanceM *float64
-	Calories  *float64
+// HourlyActivity is one (day, local hour) bucket — Hourly shape, mirrors
+// watch_activity_hourly. nil means no data for that metric that hour.
+type HourlyActivity struct {
+	Day                   string
+	Hour                  int
+	Steps                 *int64
+	DistanceM             *float64
+	Calories              *float64 // total burned, BMR included
+	ActiveEnergyKcal      *float64
+	AltitudeGainM         *float64
+	Floors                *int64
+	SedentaryMinutes      *float64
+	ActiveMinutesLight    *int64
+	ActiveMinutesModerate *int64
+	ActiveMinutesVigorous *int64
 }
 
 // HeartRateSample is one exact-timestamp reading — Timeline shape, mirrors

@@ -34,6 +34,8 @@ func (t *fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	key := "list:" + dataType
 	if strings.Contains(req.URL.Path, "dataPoints:dailyRollUp") {
 		key = "rollup:" + dataType
+	} else if strings.Contains(req.URL.Path, "dataPoints:rollUp") {
+		key = "hourly:" + dataType
 	}
 
 	body, ok := t.responses[key]
@@ -119,6 +121,9 @@ func testDataResponses() map[string]string {
 			{"dataSource":{},"timeInHeartRateZone":{"interval":{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T10:30:00Z"},"heartRateZone":"MODERATE","durationMillis":"600000"}},
 			{"dataSource":{},"timeInHeartRateZone":{"interval":{"startTime":"2026-07-30T10:30:00Z","endTime":"2026-07-30T10:40:00Z"},"heartRateZone":"MODERATE","durationMillis":"300000"}}
 		]}`,
+		"hourly:distance":                    `{"rollupDataPoints":[{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T11:00:00Z","distance":{"millimetersSum":"500000"}}]}`,
+		"hourly:floors":                      `{"rollupDataPoints":[{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T11:00:00Z","floors":{"countSum":"3"}}]}`,
+		"hourly:active-minutes":              `{"rollupDataPoints":[{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T11:00:00Z","activeMinutes":{"activeMinutesRollupByActivityLevel":[{"activityLevel":"LIGHT","activeMinutesSum":"5"},{"activityLevel":"VIGOROUS","activeMinutesSum":"2"}]}}]}`,
 		"rollup:calories-in-heart-rate-zone": `{"rollupDataPoints":[{"civilStartTime":{"date":{"year":2026,"month":7,"day":30}},"civilEndTime":{"date":{"year":2026,"month":7,"day":31}},"caloriesInHeartRateZone":{"caloriesInHeartRateZones":[{"heartRateZone":"MODERATE","kcal":45.0}]}}]}`,
 		"list:active-zone-minutes": `{"dataPoints":[
 			{"dataSource":{},"activeZoneMinutes":{"interval":{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T10:30:00Z"},"heartRateZone":"CARDIO","activeZoneMinutes":"15"}},
@@ -185,6 +190,13 @@ func newTestSyncer(t *testing.T, responses map[string]string) (*DBSyncer, *sql.D
 func TestSyncDayFullDayPopulatesEveryTable(t *testing.T) {
 	syncer, db := newTestSyncer(t, testDataResponses())
 	day := time.Date(2026, 7, 30, 0, 0, 0, 0, time.Local)
+	// A leftover hour from an earlier sync (22:00Z: never a fixture hour in
+	// any timezone) that this sync no longer returns.
+	staleHour, _ := time.Parse(time.RFC3339, "2026-07-30T22:00:00Z")
+	if _, err := db.Exec(`INSERT INTO watch_activity_hourly (user_id, day, hour, steps) VALUES (?, '2026-07-30', ?, 99)`,
+		syncer.UserID, staleHour.In(time.Local).Hour()); err != nil {
+		t.Fatal(err)
+	}
 
 	hasData, err := syncer.SyncDay(context.Background(), day)
 	if err != nil {
@@ -351,19 +363,46 @@ func TestSyncDayFullDayPopulatesEveryTable(t *testing.T) {
 		t.Errorf("sleep session resp rates deep/light/rem/full = %v/%v/%v/%v, want 14/15/16/15", deepResp, lightResp, remResp, fullResp)
 	}
 
-	// watch_steps_hourly: two buckets, at whatever local hour the fixture
+	// watch_activity_hourly: two buckets, at whatever local hour the fixture
 	// timestamps land on (portable across the test machine's timezone).
 	hour1, _ := time.Parse(time.RFC3339, "2026-07-30T10:00:00Z")
 	hour2, _ := time.Parse(time.RFC3339, "2026-07-30T11:00:00Z")
 	var steps1, steps2 int64
-	if err := db.QueryRow(`SELECT steps FROM watch_steps_hourly WHERE day='2026-07-30' AND hour=?`, hour1.In(time.Local).Hour()).Scan(&steps1); err != nil {
+	if err := db.QueryRow(`SELECT steps FROM watch_activity_hourly WHERE day='2026-07-30' AND hour=?`, hour1.In(time.Local).Hour()).Scan(&steps1); err != nil {
 		t.Fatalf("querying hourly bucket 1: %v", err)
 	}
-	if err := db.QueryRow(`SELECT steps FROM watch_steps_hourly WHERE day='2026-07-30' AND hour=?`, hour2.In(time.Local).Hour()).Scan(&steps2); err != nil {
+	if err := db.QueryRow(`SELECT steps FROM watch_activity_hourly WHERE day='2026-07-30' AND hour=?`, hour2.In(time.Local).Hour()).Scan(&steps2); err != nil {
 		t.Fatalf("querying hourly bucket 2: %v", err)
 	}
 	if steps1 != 1200 || steps2 != 800 {
 		t.Errorf("hourly steps = %d, %d, want 1200, 800", steps1, steps2)
+	}
+	// ...and an hour the API no longer returns is gone, not left stale.
+	var stale int
+	if err := db.QueryRow(`SELECT count(*) FROM watch_activity_hourly WHERE day='2026-07-30' AND hour=?`, staleHour.In(time.Local).Hour()).Scan(&stale); err != nil || stale != 0 {
+		t.Errorf("stale hourly row count = %d (err %v), want 0", stale, err)
+	}
+	// ...and the rollUp columns land on the same local-hour rows.
+	var distM float64
+	var floors, light, vigorous int64
+	if err := db.QueryRow(`SELECT distance_m, floors, active_minutes_light, active_minutes_vigorous FROM watch_activity_hourly WHERE day='2026-07-30' AND hour=?`,
+		hour1.In(time.Local).Hour()).Scan(&distM, &floors, &light, &vigorous); err != nil {
+		t.Fatalf("querying hourly rollup columns: %v", err)
+	}
+	if distM != 500 || floors != 3 || light != 5 || vigorous != 2 {
+		t.Errorf("hourly distance/floors/light/vigorous = %v/%d/%d/%d, want 500/3/5/2", distM, floors, light, vigorous)
+	}
+	// The 14:00-15:30Z sedentary period splits 60 + 30 across its two hours,
+	// not 90 filed under the hour it starts in.
+	for _, c := range []struct {
+		at   string
+		want float64
+	}{{"2026-07-30T14:00:00Z", 60}, {"2026-07-30T15:00:00Z", 30}} {
+		at, _ := time.Parse(time.RFC3339, c.at)
+		var sedentary float64
+		if err := db.QueryRow(`SELECT sedentary_minutes FROM watch_activity_hourly WHERE day='2026-07-30' AND hour=?`, at.In(time.Local).Hour()).Scan(&sedentary); err != nil || sedentary != c.want {
+			t.Errorf("hourly sedentary minutes at %s = %v (err %v), want %v", c.at, sedentary, err, c.want)
+		}
 	}
 
 	// watch_heart_rate_intraday
@@ -463,7 +502,7 @@ func TestSyncDayIsIdempotentOnRepeatedRuns(t *testing.T) {
 		"watch_exercise_session":             1,
 		"watch_ecg_reading":                  1,
 		"body_measurement":                   1,
-		"watch_steps_hourly":                 2,
+		"watch_activity_hourly":              4, // steps hours 10, 11 + sedentary hours 14, 15 (UTC)
 		"watch_active_minutes_by_level":      2, // MODERATE, VIGOROUS
 		"watch_active_zone_minutes_by_zone":  2, // CARDIO, PEAK
 		"watch_activity_level_segment":       2,

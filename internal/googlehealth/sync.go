@@ -136,7 +136,7 @@ func (s *DBSyncer) SyncDay(ctx context.Context, day time.Time) (bool, error) {
 	g2.Go(func() (err error) { exerciseFound, err = s.syncExercise(gctx2, day); return err })
 	g2.Go(func() (err error) { ecgFound, err = s.syncECG(gctx2, day); return err })
 	g2.Go(func() (err error) { bodyFound, err = s.syncBodyMeasurement(gctx2, day); return err })
-	g2.Go(func() (err error) { stepsFound, err = s.syncStepsHourly(gctx2, day); return err })
+	g2.Go(func() (err error) { stepsFound, err = s.syncActivityHourly(gctx2, day); return err })
 	g2.Go(func() (err error) { zoneDefsFound, err = s.syncHeartRateZoneDefinitions(gctx2, day); return err })
 	g2.Go(func() (err error) { zoneMinutesFound, err = s.syncHeartRateZoneMinutes(gctx2, day); return err })
 	g2.Go(func() (err error) { caloriesByZoneFound, err = s.syncCaloriesByZone(gctx2, day); return err })

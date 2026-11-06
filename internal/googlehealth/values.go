@@ -312,3 +312,22 @@ type CaloriesInHeartRateZoneRollupItem struct {
 	HeartRateZone string    `json:"heartRateZone"`
 	Kcal          PBFloat64 `json:"kcal"`
 }
+
+// ---- CONFIRMED (rollUp hourly windows, real responses 2026-11-06) ----
+// distance/total-calories/floors reuse DistanceRollup/TotalCaloriesRollup/
+// FloorsRollup: same value shapes as dailyRollUp.
+
+type AltitudeRollup struct {
+	GainMillimetersSum PBInt64 `json:"gainMillimetersSum"`
+}
+
+type ActiveEnergyBurnedRollup struct {
+	KcalSum PBFloat64 `json:"kcalSum"`
+}
+
+type ActiveMinutesRollup struct {
+	ByLevel []struct {
+		ActivityLevel    string  `json:"activityLevel"` // "LIGHT", "MODERATE", "VIGOROUS"
+		ActiveMinutesSum PBInt64 `json:"activeMinutesSum"`
+	} `json:"activeMinutesRollupByActivityLevel"`
+}
