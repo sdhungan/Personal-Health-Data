@@ -219,11 +219,10 @@ CREATE TABLE watch_active_zone_minutes_by_zone (
 );
 
 -- Hourly: per-local-hour activity buckets (at most 24 rows/day), the hourly
--- breakdown of watch_daily_summary's activity totals. steps comes from the
--- step intervals (same dedupe as steps_total); every other column from
--- Google's hourly rollUp, whose hours sum exactly to the daily rollup. A
--- row exists for an hour with any data; a NULL column means no data for
--- that metric that hour (i.e. zero).
+-- breakdown of watch_daily_summary's activity totals, from Google's hourly
+-- rollUp, watch only (never watch + phone), whose hours sum exactly to the
+-- daily rollup. A row exists for an hour with any data; a NULL column means
+-- no data for that metric that hour (i.e. zero).
 CREATE TABLE watch_activity_hourly (
     user_id                 INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     day                     TEXT NOT NULL,

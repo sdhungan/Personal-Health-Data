@@ -74,16 +74,25 @@ func (c *Client) ListDataPoints(ctx context.Context, dataType, filter string, pa
 	return c.do(ctx, http.MethodGet, u, nil)
 }
 
+// watchOnly limits a rollup to the watch. Without it Google defaults to
+// "all-sources" and blends the phone's overlapping readings in (CONFIRMED
+// 2026-11-07: steps on 2026-11-05 = 5643 all-sources, 5444 google-wearables
+// = exactly the watch's own list() sum). The user's rule: the watch is the
+// source of truth, never watch + phone. Accepted values per the API's own
+// error: all-sources, google-wearables, google-sources, self-sources.
+const watchOnly = "users/me/dataSourceFamilies/google-wearables"
+
 // RollUp calls POST .../dataTypes/{dataType}/dataPoints:rollUp: values
-// summed into fixed windows (e.g. "3600s") over [start, end), deduplicated
-// across sources the same way dailyRollUp is (CONFIRMED 2026-11-06: 24
-// hourly windows summed to exactly the dailyRollUp value for all 8 types
-// synced hourly). Windows with no data are omitted.
+// summed into fixed windows (e.g. "3600s") over [start, end) (CONFIRMED
+// 2026-11-06: 24 hourly windows summed to exactly the dailyRollUp value for
+// all 8 types synced hourly).
+// Windows with no data are omitted. Watch-only, see watchOnly.
 func (c *Client) RollUp(ctx context.Context, dataType string, start, end time.Time, window string) (json.RawMessage, error) {
 	u := fmt.Sprintf("%s/users/me/dataTypes/%s/dataPoints:rollUp", BaseURL, dataType)
 	body, err := json.Marshal(map[string]any{
-		"range":      map[string]string{"startTime": start.UTC().Format(time.RFC3339), "endTime": end.UTC().Format(time.RFC3339)},
-		"windowSize": window,
+		"range":            map[string]string{"startTime": start.UTC().Format(time.RFC3339), "endTime": end.UTC().Format(time.RFC3339)},
+		"windowSize":       window,
+		"dataSourceFamily": watchOnly,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshaling rollUp request body: %w", err)
@@ -101,6 +110,7 @@ func (c *Client) DailyRollUp(ctx context.Context, dataType string, start, end Ci
 			"start": start,
 			"end":   end,
 		},
+		"dataSourceFamily": watchOnly,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshaling dailyRollUp request body: %w", err)

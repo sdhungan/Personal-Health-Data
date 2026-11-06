@@ -434,12 +434,19 @@ docs described. A few things worth knowing before touching this code again:
 - Resolved 2026-11-06: hourly activity (`watch_activity_hourly`, formerly
   `watch_steps_hourly`, whose distance/calories columns were never written)
   is now filled from `dataPoints:rollUp` with `windowSize: "3600s"` for
-  distance, total-calories, active-energy-burned, altitude, floors,
+  steps, distance, total-calories, active-energy-burned, altitude, floors,
   sedentary-period and active-minutes. Confirmed against the real API: the
-  hourly windows sum exactly to `dailyRollUp` (so already deduplicated
-  across watch + phone), hours with no data are omitted, and floors' real
-  shape is `{"floors":{"countSum":"2"}}`. Raw `list()` is per-minute for
-  most of these, but floors and total-calories reject `list()` outright.
+  hourly windows sum exactly to `dailyRollUp`, hours with no data are
+  omitted, and floors' real shape is `{"floors":{"countSum":"2"}}`. Raw
+  `list()` is per-minute for most of these, but floors and total-calories
+  reject `list()` outright.
+- **The watch is the source of truth, never watch + phone** (user's rule,
+  2026-11-07). The phone (Health Connect) also reports steps, distance and
+  active energy, and rollups default to `all-sources`, which blends it in
+  (steps 2026-11-05: 5643 all-sources vs 5444 watch). Every rollup request
+  sends `dataSourceFamily: "users/me/dataSourceFamilies/google-wearables"`
+  (`watchOnly` in `client.go`), which returns exactly the watch's own sum.
+  Never sum `list()` points across sources for these metrics.
 - Three Cronometer fields are structurally present but never populated,
   confirmed against real account data, not guessed: `cronometer_serving.category`
   (Cronometer's `food.Category` is a numeric ID with no confirmed name

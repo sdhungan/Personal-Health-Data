@@ -104,7 +104,7 @@ type FloorsRollup struct {
 // DistanceRollup is CONFIRMED (2026-10-28, real dailyRollUp response:
 // {"distance":{"millimetersSum":"8745700"}}). Used instead of summing
 // list() points: the watch and the phone (Health Connect) both report
-// distance, and the rollup is already deduplicated across them.
+// distance; the rollup can be limited to the watch (see watchOnly).
 type DistanceRollup struct {
 	MillimetersSum PBInt64 `json:"millimetersSum"`
 }
@@ -311,6 +311,10 @@ type CaloriesInHeartRateZoneRollupItem struct {
 // ---- CONFIRMED (rollUp hourly windows, real responses 2026-11-06) ----
 // distance/total-calories/floors reuse DistanceRollup/TotalCaloriesRollup/
 // FloorsRollup: same value shapes as dailyRollUp.
+
+type StepsRollup struct {
+	CountSum PBInt64 `json:"countSum"`
+}
 
 type AltitudeRollup struct {
 	GainMillimetersSum PBInt64 `json:"gainMillimetersSum"`

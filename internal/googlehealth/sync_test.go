@@ -37,6 +37,15 @@ func (t *fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	} else if strings.Contains(req.URL.Path, "dataPoints:rollUp") {
 		key = "hourly:" + dataType
 	}
+	// Every rollup must be watch-only (see watchOnly): without the source
+	// family Google blends the phone's readings in.
+	if key != "list:"+dataType {
+		body, _ := io.ReadAll(req.Body)
+		if !strings.Contains(string(body), watchOnly) {
+			return &http.Response{StatusCode: 400, Body: io.NopCloser(strings.NewReader(`{"error":"rollup without the watch-only source family"}`)),
+				Header: make(http.Header), Request: req}, nil
+		}
+	}
 
 	body, ok := t.responses[key]
 	if !ok {
@@ -94,9 +103,10 @@ func testDataResponses() map[string]string {
 		}}]}`,
 		"list:daily-respiratory-rate": `{"dataPoints":[{"dataSource":{},"dailyRespiratoryRate":{"date":{"year":2026,"month":7,"day":30},"breathsPerMinute":16.5}}]}`,
 		"rollup:total-calories":       `{"rollupDataPoints":[{"civilStartTime":{"date":{"year":2026,"month":7,"day":30}},"civilEndTime":{"date":{"year":2026,"month":7,"day":31}},"totalCalories":{"kcalSum":2103.5}}]}`,
-		"list:steps": `{"dataPoints":[
-			{"dataSource":{},"steps":{"interval":{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T11:00:00Z"},"count":"1200"}},
-			{"dataSource":{},"steps":{"interval":{"startTime":"2026-07-30T11:00:00Z","endTime":"2026-07-30T12:00:00Z"},"count":"800"}}
+		"rollup:steps":                `{"rollupDataPoints":[{"civilStartTime":{"date":{"year":2026,"month":7,"day":30}},"civilEndTime":{"date":{"year":2026,"month":7,"day":31}},"steps":{"countSum":"2000"}}]}`,
+		"hourly:steps": `{"rollupDataPoints":[
+			{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T11:00:00Z","steps":{"countSum":"1200"}},
+			{"startTime":"2026-07-30T11:00:00Z","endTime":"2026-07-30T12:00:00Z","steps":{"countSum":"800"}}
 		]}`,
 		"rollup:distance": `{"rollupDataPoints":[{"civilStartTime":{"date":{"year":2026,"month":7,"day":30}},"civilEndTime":{"date":{"year":2026,"month":7,"day":31}},"distance":{"millimetersSum":"1500000"}}]}`,
 		"list:active-minutes": `{"dataPoints":[{"dataSource":{},"activeMinutes":{
@@ -532,7 +542,7 @@ func TestSyncDayPreservesFieldsNotReturnedThisRun(t *testing.T) {
 	// gap in that one endpoint) — steps_total must NOT be wiped out by
 	// the otherwise-successful re-sync.
 	partial := testDataResponses()
-	delete(partial, "list:steps")
+	delete(partial, "rollup:steps")
 	syncer.Client = NewClient(&http.Client{Transport: &fakeTransport{responses: partial}})
 	if _, err := syncer.SyncDay(context.Background(), day); err != nil {
 		t.Fatalf("second SyncDay: %v", err)
@@ -590,53 +600,4 @@ func TestUpsertActiveMinutesByLevelRollsBackOnPartialFailure(t *testing.T) {
 	if level != "MODERATE" || minutes != 20 {
 		t.Errorf("surviving row = (%q, %d), want the untouched pre-failure row (MODERATE, 20)", level, minutes)
 	}
-}
-
-// TestDedupedHourlyStepsMaxesAcrossSourcesInsteadOfSumming reproduces a real
-// account's steps tile showing roughly double the true count: a phone's own
-// step sensor and a watch both reporting steps for the same hour. Summing
-// both (the old behavior) double-counts; the fix takes the max reported by
-// any single source for that hour instead.
-func TestDedupedHourlyStepsMaxesAcrossSourcesInsteadOfSumming(t *testing.T) {
-	interval := ObservationTimeInterval{StartTime: "2026-07-30T10:00:00Z", EndTime: "2026-07-30T11:00:00Z"}
-	points := []SourcedValue[Steps]{
-		{Source: "phone", Value: Steps{Interval: interval, Count: 500}},
-		{Source: "watch", Value: Steps{Interval: interval, Count: 700}},
-	}
-
-	hourly := dedupedHourlySteps(points)
-	hour := mustParseUTC(t, interval.StartTime).In(time.Local).Hour()
-	if got, want := hourly[hour], int64(700); got != want {
-		t.Errorf("dedupedHourlySteps with two sources in the same hour = %d, want %d (max, not the summed 1200)", got, want)
-	}
-}
-
-// TestDedupedHourlyStepsSumsSameSourceAcrossChunks checks that multiple
-// same-source intervals within an hour (a device reporting in smaller
-// chunks) still add up, rather than the per-source dedup accidentally
-// collapsing them too.
-func TestDedupedHourlyStepsSumsSameSourceAcrossChunks(t *testing.T) {
-	points := []SourcedValue[Steps]{
-		{Source: "watch", Value: Steps{
-			Interval: ObservationTimeInterval{StartTime: "2026-07-30T10:00:00Z", EndTime: "2026-07-30T10:30:00Z"}, Count: 300,
-		}},
-		{Source: "watch", Value: Steps{
-			Interval: ObservationTimeInterval{StartTime: "2026-07-30T10:30:00Z", EndTime: "2026-07-30T11:00:00Z"}, Count: 400,
-		}},
-	}
-
-	hourly := dedupedHourlySteps(points)
-	hour := mustParseUTC(t, "2026-07-30T10:00:00Z").In(time.Local).Hour()
-	if got, want := hourly[hour], int64(700); got != want {
-		t.Errorf("dedupedHourlySteps with same-source chunks = %d, want %d (summed within one source)", got, want)
-	}
-}
-
-func mustParseUTC(t *testing.T, s string) time.Time {
-	t.Helper()
-	tm, err := time.Parse(time.RFC3339, s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return tm
 }

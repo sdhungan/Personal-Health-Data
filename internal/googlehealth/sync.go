@@ -214,7 +214,8 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 		totalCalFound     bool
 		floors            FloorsRollup
 		floorsFound       bool
-		steps             []SourcedValue[Steps]
+		steps             StepsRollup
+		stepsFound        bool
 		distance          DistanceRollup
 		distanceFound     bool
 		altitude          []Altitude
@@ -276,9 +277,10 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 		distance, distanceFound, err = fetchDailyRollup[DistanceRollup](gctx, s.Client, "distance", day)
 		return err
 	})
-	// active energy: rollup too. list() returns both the watch's per-minute
-	// points and the phone's overlapping sub-minute ones, so summing it
-	// double-counted (e.g. 2026-11-05: 712.6 kcal summed vs 443.2 rollup).
+	// active energy and steps: rollups too, watch-only. list() returns the
+	// watch's points and the phone's overlapping ones, so summing it
+	// double-counted (e.g. active energy 2026-11-05: 712.6 kcal summed,
+	// 393.4 from the watch alone).
 	g.Go(func() (err error) {
 		activeEnergy, activeEnergyFound, err = fetchDailyRollup[ActiveEnergyBurnedRollup](gctx, s.Client, "active-energy-burned", day)
 		return err
@@ -286,7 +288,7 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 
 	// ---- Interval types, filtered server-side to this day ----
 	g.Go(func() (err error) {
-		steps, err = fetchIntervalPointsWithSource[Steps](gctx, s.Client, "steps", day)
+		steps, stepsFound, err = fetchDailyRollup[StepsRollup](gctx, s.Client, "steps", day)
 		return err
 	})
 	g.Go(func() (err error) {
@@ -361,11 +363,8 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 		out.FloorsClimbed = &climbed
 		hasData = true
 	}
-	if len(steps) > 0 {
-		var total int64
-		for _, count := range dedupedHourlySteps(steps) {
-			total += count
-		}
+	if stepsFound {
+		total := int64(steps.CountSum)
 		out.StepsTotal = &total
 		hasData = true
 	}
@@ -477,24 +476,6 @@ func fetchIntervalPoints[T any](ctx context.Context, client *Client, dataTypeNam
 		return nil, fmt.Errorf("listing %s: %w", dataTypeName, err)
 	}
 	points, err := ExtractValues[T](raw, ValueKey(dataTypeName))
-	if err != nil {
-		return nil, fmt.Errorf("decoding %s: %w", dataTypeName, err)
-	}
-	return points, nil
-}
-
-// fetchIntervalPointsWithSource is fetchIntervalPoints, but keeps each
-// point's data source (see ExtractValuesWithSource) — used by metrics where
-// more than one device reporting the same period must be deduplicated
-// rather than summed together (currently just steps; see
-// dedupedHourlySteps).
-func fetchIntervalPointsWithSource[T any](ctx context.Context, client *Client, dataTypeName string, day time.Time) ([]SourcedValue[T], error) {
-	filter := intervalDayFilter(dataTypeName, day)
-	raw, err := client.ListDataPoints(ctx, dataTypeName, filter, 10000)
-	if err != nil {
-		return nil, fmt.Errorf("listing %s: %w", dataTypeName, err)
-	}
-	points, err := ExtractValuesWithSource[T](raw, ValueKey(dataTypeName))
 	if err != nil {
 		return nil, fmt.Errorf("decoding %s: %w", dataTypeName, err)
 	}

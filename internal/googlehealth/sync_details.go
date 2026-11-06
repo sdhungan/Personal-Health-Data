@@ -520,43 +520,8 @@ func (s *DBSyncer) syncCoreBodyTemperature(ctx context.Context, day time.Time) (
 	return true, &a, &lo, &hi, nil
 }
 
-// dedupedHourlySteps buckets step points by local hour, deduplicating
-// across data sources: points from the same source within an hour are
-// summed first (sequential chunks from one device), then the hour's value
-// is the max across sources rather than their sum. Summing whole-source
-// totals double-counts whenever more than one device reports steps for the
-// same period — e.g. a phone's own step sensor running alongside a watch,
-// which is exactly what produced a real account's steps tile showing
-// roughly double the true count. With only one source reporting (the
-// common case), this reduces to the same per-hour sum as before.
-func dedupedHourlySteps(points []SourcedValue[Steps]) map[int]int64 {
-	bySourceHour := map[string]map[int]int64{}
-	for _, p := range points {
-		start, err := p.Value.Interval.Start()
-		if err != nil {
-			continue
-		}
-		hour := start.In(time.Local).Hour()
-		if bySourceHour[p.Source] == nil {
-			bySourceHour[p.Source] = map[int]int64{}
-		}
-		bySourceHour[p.Source][hour] += int64(p.Value.Count)
-	}
-
-	hourly := make(map[int]int64)
-	for _, hours := range bySourceHour {
-		for hour, count := range hours {
-			if count > hourly[hour] {
-				hourly[hour] = count
-			}
-		}
-	}
-	return hourly
-}
-
-// syncActivityHourly fills watch_activity_hourly for day: steps from the
-// day's step intervals (dedupedHourlySteps, same as steps_total), every
-// other column from an hourly rollUp per data type.
+// syncActivityHourly fills watch_activity_hourly for day from one hourly,
+// watch-only rollUp per data type.
 func (s *DBSyncer) syncActivityHourly(ctx context.Context, day time.Time) (bool, error) {
 	dayStr := dayKey(day)
 	rows := map[int]*healthdata.HourlyActivity{}
@@ -569,17 +534,8 @@ func (s *DBSyncer) syncActivityHourly(ctx context.Context, day time.Time) (bool,
 
 	var mu sync.Mutex // every fetch below writes into rows
 	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		points, err := fetchIntervalPointsWithSource[Steps](gctx, s.Client, "steps", day)
-		if err != nil {
-			return err
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		for hour, steps := range dedupedHourlySteps(points) {
-			addTo(&row(hour).Steps, steps)
-		}
-		return nil
+	hourlyRollup(g, gctx, s.Client, "steps", day, &mu, row, func(r *healthdata.HourlyActivity, v StepsRollup) {
+		addTo(&r.Steps, int64(v.CountSum))
 	})
 	hourlyRollup(g, gctx, s.Client, "distance", day, &mu, row, func(r *healthdata.HourlyActivity, v DistanceRollup) {
 		addTo(&r.DistanceM, float64(v.MillimetersSum)/1000)
