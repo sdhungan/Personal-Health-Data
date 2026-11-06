@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -280,6 +281,17 @@ func TestMigrateUpgradesFromBaselineAndRejectsOlder(t *testing.T) {
 	}
 	if want := time.Date(2026, 8, 5, 20, 2, 25, 0, time.UTC).Unix(); ts != want || bpm != 61 {
 		t.Errorf("migrated heart-rate row = (%v %T, %v), want (%d int64, 61)", ts, ts, bpm, want)
+	}
+	var hrSQL string
+	if err := conn.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'watch_heart_rate_intraday'`).Scan(&hrSQL); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(hrSQL, "WITHOUT ROWID") || strings.Contains(hrSQL, "cached_at") {
+		t.Errorf("migrated heart-rate table should be WITHOUT ROWID with no cached_at:\n%s", hrSQL)
+	}
+	var free int
+	if err := conn.QueryRow(`PRAGMA freelist_count`).Scan(&free); err != nil || free != 0 {
+		t.Errorf("free pages after migrate = %d (err %v), want 0: VACUUM didn't run", free, err)
 	}
 
 	if _, err := conn.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, migrationBase-1)); err != nil {

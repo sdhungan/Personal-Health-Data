@@ -230,23 +230,17 @@ CREATE TABLE watch_steps_hourly (
     PRIMARY KEY (user_id, day, hour)
 );
 
--- Timeline: rolling CACHE of fine-grained (e.g. 1-5min) heart rate samples.
--- This is intentionally NOT the source of truth for historical data:
--- intraday HR at full resolution is high volume, so old rows may be pruned
--- by the sync job or a maintenance task. If the UI needs detailed HR for a
--- day whose cache has been pruned, fetch it live from the Google Health
--- API instead of treating this table as complete history.
+-- Timeline: every raw heart-rate sample (~14k a day, by far the biggest
+-- table), kept as full history — nothing prunes it. Stored compactly:
 -- recorded_at is Unix seconds (UTC), not RFC3339 text like the other
--- tables: at ~14k samples a day the text form was most of the row.
+-- tables, and WITHOUT ROWID keeps the rows in the primary-key b-tree
+-- instead of a rowid table plus a separate index.
 CREATE TABLE watch_heart_rate_intraday (
     user_id     INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     recorded_at INTEGER NOT NULL,
     bpm         REAL NOT NULL,
-    cached_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     PRIMARY KEY (user_id, recorded_at)
-);
-
-CREATE INDEX idx_watch_heart_rate_intraday_cached_at ON watch_heart_rate_intraday (cached_at);
+) WITHOUT ROWID;
 
 -- Timeline: full-fidelity blood glucose / core body temperature samples.
 -- The sync job also derives watch_daily_summary's

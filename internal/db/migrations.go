@@ -33,6 +33,21 @@ var Migrations = []string{
 	DROP TABLE watch_heart_rate_intraday;
 	ALTER TABLE watch_heart_rate_intraday_new RENAME TO watch_heart_rate_intraday;
 	CREATE INDEX idx_watch_heart_rate_intraday_cached_at ON watch_heart_rate_intraday (cached_at);`,
+
+	// watch_heart_rate_intraday: drop cached_at and its index (nothing ever
+	// pruned by it) and make the table WITHOUT ROWID, so the rows live in
+	// the primary-key b-tree itself instead of a rowid table plus a
+	// separate primary-key index. Dropping the old table drops its index.
+	`CREATE TABLE watch_heart_rate_intraday_new (
+	    user_id     INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+	    recorded_at INTEGER NOT NULL,
+	    bpm         REAL NOT NULL,
+	    PRIMARY KEY (user_id, recorded_at)
+	) WITHOUT ROWID;
+	INSERT INTO watch_heart_rate_intraday_new (user_id, recorded_at, bpm)
+	    SELECT user_id, recorded_at, bpm FROM watch_heart_rate_intraday;
+	DROP TABLE watch_heart_rate_intraday;
+	ALTER TABLE watch_heart_rate_intraday_new RENAME TO watch_heart_rate_intraday;`,
 }
 
 // migrationBase is the version every database had reached when its earlier

@@ -213,16 +213,14 @@ func (s *DBSyncer) upsertHourlySteps(ctx context.Context, rows []healthdata.Hour
 	return nil
 }
 
-// upsertHeartRateSamples caches heart-rate samples into
-// watch_heart_rate_intraday — a rolling cache, not the source of truth for
-// history (see the table's comment in internal/db/schema.sql).
+// upsertHeartRateSamples stores the day's raw heart-rate samples into
+// watch_heart_rate_intraday (full history, see its schema comment).
 func (s *DBSyncer) upsertHeartRateSamples(ctx context.Context, rows []healthdata.HeartRateSample) error {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, r := range rows {
 		if _, err := s.DB.ExecContext(ctx, `
-			INSERT INTO watch_heart_rate_intraday (user_id, recorded_at, bpm, cached_at) VALUES (?, ?, ?, ?)
-			ON CONFLICT(user_id, recorded_at) DO UPDATE SET bpm = excluded.bpm, cached_at = excluded.cached_at
-		`, s.UserID, r.RecordedAt.Unix(), r.Bpm, now); err != nil {
+			INSERT INTO watch_heart_rate_intraday (user_id, recorded_at, bpm) VALUES (?, ?, ?)
+			ON CONFLICT(user_id, recorded_at) DO UPDATE SET bpm = excluded.bpm
+		`, s.UserID, r.RecordedAt.Unix(), r.Bpm); err != nil {
 			return fmt.Errorf("upserting watch_heart_rate_intraday: %w", err)
 		}
 	}

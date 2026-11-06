@@ -152,9 +152,19 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("database schema version %d is older than %d, the oldest this healthd can upgrade: "+
 			"open it once with a healthd built from git tag pre-migration-squash to bring it up to date, or re-init the root", version, migrationBase)
 	}
-	for v := version; v < migrationBase+len(Migrations); v++ {
+	latest := migrationBase + len(Migrations)
+	for v := version; v < latest; v++ {
 		if err := s.applyMigration(v); err != nil {
 			return err
+		}
+	}
+	// A migration that rebuilds a table leaves the old copy's pages free
+	// inside the file; the file (and the encrypted copy) only shrinks on
+	// VACUUM. Migrations are the only bulk deletes healthd does, so this is
+	// the one place it's worth doing. Can't run inside a transaction.
+	if version < latest {
+		if _, err := s.conn.Exec(`VACUUM`); err != nil {
+			return fmt.Errorf("vacuuming after migrating to version %d: %w", latest, err)
 		}
 	}
 	return nil
