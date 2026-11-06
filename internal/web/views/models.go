@@ -132,7 +132,13 @@ type DetailData struct {
 	Stats       []StatItem
 	LineSamples []HRSample // Kind == "line"
 	LineUnit    string     // Kind == "line": tooltip unit, e.g. "bpm"
-	StageRows   []StageRow // Kind == "stages": one timeline per row (sleep: main sleep + each nap)
+	// LineZeroBased: y-axis from 0 like the bar charts (amounts: kcal, km),
+	// instead of heart rate's min-10..max+10.
+	LineZeroBased bool
+	// LineDots: a dot on every sample, however many (the hourly activity
+	// lines); otherwise only up to maxDotSamples.
+	LineDots  bool
+	StageRows []StageRow // Kind == "stages": one timeline per row (sleep: main sleep + each nap)
 }
 
 // StageRow is one segmented timeline bar with its label, e.g.
@@ -199,6 +205,8 @@ type ChartData struct {
 	// bar's tooltip text, formatted with its unit (e.g. "5.6 km", "6h 5m").
 	Unit        string
 	ValueLabels []string
+	// YMax fixes the y-axis top (minutes per hour: 60); 0 sizes it to the data.
+	YMax float64
 }
 
 // ActivitySummary is one row in the activities tile / list.

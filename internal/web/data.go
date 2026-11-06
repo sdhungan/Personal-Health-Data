@@ -407,6 +407,9 @@ func buildStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileDa
 	if !expanded {
 		return t, nil
 	}
+	if col, ok := hourlyColumns[kind]; ok {
+		return hourlyTile(ctx, db, userID, t, def, day, days, col)
+	}
 
 	if days > 1 {
 		// resting HR/HRV/heart rate read as a line at any range: day-to-day
@@ -429,19 +432,6 @@ func buildStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileDa
 
 	// A single day: the detail behind the day's number, where there is any.
 	switch kind {
-	case "steps":
-		hourly, err := fetchStepsHourly(ctx, db, userID, day)
-		if err != nil {
-			return t, err
-		}
-		if chart := buildHourlyStepsChart(hourly); chart != nil {
-			labelChart(chart, def)
-			t.Chart = chart
-			t.ChartSubtext = fmt.Sprintf("Total today: %s steps", fmtInt(chart.Total))
-			t.Empty = false
-		} else if t.Empty {
-			t.EmptyMsg = "No hourly step data for this day"
-		}
 	case "heart_rate":
 		detail, err := fetchHeartRateDetail(ctx, db, userID, day, today)
 		if err != nil {
@@ -494,51 +484,146 @@ func localDayRangeUnix(day time.Time) (start, end int64) {
 	return s.Unix(), s.AddDate(0, 0, 1).Unix()
 }
 
-// fetchStepsHourly returns steps bucketed by local hour (0-23) for day, from
-// watch_activity_hourly.
-func fetchStepsHourly(ctx context.Context, db *sql.DB, userID int64, day time.Time) ([24]int64, error) {
-	var hours [24]int64
-	rows, err := db.QueryContext(ctx, `SELECT hour, steps FROM watch_activity_hourly WHERE user_id = ? AND day = ?`, userID, day.Format(dateLayout))
+// hourlyColumn is an activity tile's hourly series: expr is its
+// watch_activity_hourly value in the tile's display unit (constant SQL,
+// never user input). yMax fixes the y-axis top; 0 sizes it to the data.
+type hourlyColumn struct {
+	expr string
+	yMax float64
+}
+
+// amountPerHour is an amount (steps, kcal, km): the y-axis fits the data.
+func amountPerHour(expr string) hourlyColumn { return hourlyColumn{expr: expr} }
+
+// minutesPerHour is a time amount within the hour, so never over 60: the
+// hourly bars' y-axis is fixed at 0-60 min, the same scale for every hour.
+func minutesPerHour(expr string) hourlyColumn { return hourlyColumn{expr: expr, yMax: 60} }
+
+// hourlyColumns maps a tile kind to its hourly series.
+var hourlyColumns = map[string]hourlyColumn{
+	"steps":          amountPerHour("steps"),
+	"calories":       amountPerHour("calories"),
+	"active_energy":  amountPerHour("active_energy_kcal"),
+	"distance":       amountPerHour("distance_m / 1000.0"),
+	"floors":         amountPerHour("floors"),
+	"altitude":       amountPerHour("altitude_gain_m"),
+	"active_minutes": minutesPerHour("coalesce(active_minutes_light, 0) + coalesce(active_minutes_moderate, 0) + coalesce(active_minutes_vigorous, 0)"),
+	"sedentary":      minutesPerHour("sedentary_minutes"),
+}
+
+// maxHourlyBarDays is the longest range an activity tile draws as hourly
+// bars (1W = 168); from 2W on, a dotted line of each day's total (an hourly
+// line is unreadable at 336+ points, and the tile's stat is per day).
+const maxHourlyBarDays = 7
+
+// hourlyTile fills an activity tile's expanded view from its hourly
+// values over the days ending on day: hourly bars up to maxHourlyBarDays,
+// a daily-total line past it.
+func hourlyTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, def metricDef, day time.Time, days int, col hourlyColumn) (views.TileData, error) {
+	first := day.AddDate(0, 0, -(days - 1))
+	hourly, err := fetchHourly(ctx, db, userID, first, days, col.expr)
 	if err != nil {
-		return hours, fmt.Errorf("querying watch_activity_hourly for %s: %w", day.Format(dateLayout), err)
+		return t, err
+	}
+	// Days with any data: the per-day average divides by these (like the
+	// daily trend lines), so days before the watch was worn don't drag it
+	// down, and the line skips them.
+	var total float64
+	hasData := make([]bool, days)
+	withData := 0
+	for i, v := range hourly {
+		total += v
+		if v != 0 && !hasData[i/24] {
+			hasData[i/24] = true
+			withData++
+		}
+	}
+	if withData == 0 {
+		if t.Empty {
+			t.EmptyMsg = "No hourly data for this range"
+		}
+		return t, nil
+	}
+	t.Empty = false
+
+	when := func(i int) string { // the hour's start, with its date past one day
+		clock := hourLabel(i%24) + ":00"
+		if days == 1 {
+			return clock
+		}
+		return trendLabel(first.AddDate(0, 0, i/24)) + " " + clock
+	}
+	perDay := withUnit(def.Format(total/float64(withData)), def.Unit)
+
+	if days > maxHourlyBarDays {
+		// No col.yMax here: a day holds up to 1440 minutes, not 60.
+		d := &views.DetailData{Kind: "line", LineUnit: def.Unit, LineZeroBased: true, LineDots: true,
+			Stats: []views.StatItem{{Label: fmt.Sprintf("%d-day average", days), Value: perDay + " per day"}}}
+		for i := range days {
+			if !hasData[i] {
+				continue
+			}
+			var sum float64
+			for _, v := range hourly[i*24 : i*24+24] {
+				sum += v
+			}
+			d.LineSamples = append(d.LineSamples, views.HRSample{TimeLabel: trendLabel(first.AddDate(0, 0, i)), Bpm: sum, ValueLabel: withUnit(def.Format(sum), def.Unit)})
+		}
+		t.Detail = d
+		return t, nil
+	}
+
+	c := &views.ChartData{Unit: def.Unit, Total: total, Average: total / float64(withData), YMax: col.yMax}
+	every := (days + 6) / 7 // a date on at most ~7 midnights
+	for i, v := range hourly {
+		axis := ""
+		switch {
+		case days == 1 && i%3 == 0:
+			axis = hourLabel(i)
+		case days > 1 && i%24 == 0 && (i/24)%every == 0:
+			axis = trendLabel(first.AddDate(0, 0, i/24))
+		}
+		c.Labels = append(c.Labels, axis)
+		c.Values = append(c.Values, v)
+		c.ValueLabels = append(c.ValueLabels, when(i)+" · "+withUnit(def.Format(v), def.Unit))
+	}
+	t.Chart = c
+	if days == 1 {
+		t.ChartSubtext = "Total today: " + withUnit(def.Format(total), def.Unit)
+	} else {
+		t.BigValue = def.Format(total / float64(withData))
+		t.ChartSubtext = fmt.Sprintf("%d-day average: %s per day", days, perDay)
+	}
+	return t, nil
+}
+
+// fetchHourly returns expr (see hourlyColumns) for every local hour of the
+// days days starting on first, in order (index = day*24 + hour); hours with
+// no row or NULL are 0.
+func fetchHourly(ctx context.Context, db *sql.DB, userID int64, first time.Time, days int, expr string) ([]float64, error) {
+	out := make([]float64, days*24)
+	dayIndex := make(map[string]int, days)
+	for i := 0; i < days; i++ {
+		dayIndex[first.AddDate(0, 0, i).Format(dateLayout)] = i
+	}
+	rows, err := db.QueryContext(ctx, `SELECT day, hour, `+expr+` FROM watch_activity_hourly WHERE user_id = ? AND day BETWEEN ? AND ?`,
+		userID, first.Format(dateLayout), first.AddDate(0, 0, days-1).Format(dateLayout))
+	if err != nil {
+		return nil, fmt.Errorf("querying watch_activity_hourly from %s: %w", first.Format(dateLayout), err)
 	}
 	defer rows.Close()
 	for rows.Next() {
+		var d string
 		var hour int
-		var steps sql.NullInt64
-		if err := rows.Scan(&hour, &steps); err != nil {
-			return hours, fmt.Errorf("scanning watch_activity_hourly row: %w", err)
+		var v sql.NullFloat64
+		if err := rows.Scan(&d, &hour, &v); err != nil {
+			return nil, fmt.Errorf("scanning watch_activity_hourly row: %w", err)
 		}
-		if hour >= 0 && hour < 24 {
-			hours[hour] = steps.Int64
+		if i, ok := dayIndex[d]; ok && hour >= 0 && hour < 24 {
+			out[i*24+hour] = v.Float64
 		}
 	}
-	return hours, rows.Err()
-}
-
-func buildHourlyStepsChart(hourly [24]int64) *views.ChartData {
-	c := &views.ChartData{}
-	var total float64
-	any := false
-	for h := 0; h < 24; h++ {
-		v := float64(hourly[h])
-		if v > 0 {
-			any = true
-		}
-		total += v
-		label := ""
-		if h%3 == 0 {
-			label = hourLabel(h)
-		}
-		c.Labels = append(c.Labels, label)
-		c.Values = append(c.Values, v)
-	}
-	if !any {
-		return nil
-	}
-	c.Total = total
-	c.Average = total / 24
-	return c
+	return out, rows.Err()
 }
 
 // hourLabel formats an hour-of-day (0-23) in 24h form ("00".."23") — plain

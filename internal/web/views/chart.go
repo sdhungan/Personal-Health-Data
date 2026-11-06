@@ -91,6 +91,9 @@ func renderBarChartSVG(c ChartData, id string) string {
 	// etc. never go negative) — only series like caloric deficit/surplus
 	// dip below zero, so the floor is rounded the same "nice" way.
 	axisMax := niceCeiling(maxVal)
+	if c.YMax > 0 {
+		axisMax = c.YMax
+	}
 	axisMin := 0.0
 	if minVal < 0 {
 		axisMin = -niceCeiling(-minVal)
@@ -153,7 +156,7 @@ func renderBarChartSVG(c ChartData, id string) string {
 // maxDotSamples is the most samples a line chart draws individual dots for.
 const maxDotSamples = 31
 
-func renderLineChartSVG(samples []HRSample, id, unit string) string {
+func renderLineChartSVG(samples []HRSample, id, unit string, zeroBased, dots bool) string {
 	n := len(samples)
 	if n == 0 {
 		return ""
@@ -163,10 +166,17 @@ func renderLineChartSVG(samples []HRSample, id, unit string) string {
 		minV = min(minV, s.Bpm)
 		maxV = max(maxV, s.Bpm)
 	}
-	// Dynamic y-axis: data min-10 to max+10, never anchored at 0, so a
-	// day-to-day trend (resting HR, HRV) stays visible.
-	minV -= 10
-	maxV += 10
+	if zeroBased {
+		minV, maxV = 0, niceCeiling(max(maxV, 0))
+		if maxV <= 0 {
+			maxV = 1
+		}
+	} else {
+		// Dynamic y-axis: data min-10 to max+10, never anchored at 0, so a
+		// day-to-day trend (resting HR, HRV) stays visible.
+		minV -= 10
+		maxV += 10
+	}
 
 	x := func(i int) float64 {
 		if n == 1 {
@@ -212,7 +222,7 @@ func renderLineChartSVG(samples []HRSample, id, unit string) string {
 	// A visible dot per sample when there are few enough to tell apart
 	// (14-day resting HR/HRV), not on dense intraday heart rate. HTML rather
 	// than SVG circles so they stay round on the stretched plot.
-	if n <= maxDotSamples {
+	if dots || n <= maxDotSamples {
 		for i, s := range samples {
 			fmt.Fprintf(&b, `<span class="chart-dot" style="left:%.2f%%;top:%.2f%%"></span>`, x(i), y(s.Bpm))
 		}

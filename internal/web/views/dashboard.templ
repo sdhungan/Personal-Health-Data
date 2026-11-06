@@ -316,7 +316,7 @@ templ detailTileBody(t TileData) {
 	switch t.Detail.Kind {
 		case "line":
 			if len(t.Detail.LineSamples) > 0 {
-				@templ.Raw(renderLineChartSVG(t.Detail.LineSamples, chartInstanceID(t.ID), t.Detail.LineUnit))
+				@templ.Raw(renderLineChartSVG(t.Detail.LineSamples, chartInstanceID(t.ID), t.Detail.LineUnit, t.Detail.LineZeroBased, t.Detail.LineDots))
 			}
 		case "stages":
 			if len(t.Detail.StageRows) > 0 {
