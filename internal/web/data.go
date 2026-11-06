@@ -548,11 +548,10 @@ func hourLabel(h int) string {
 }
 
 // fetchHeartRateDetail builds the heart-rate tile's expanded detail: an
-// intraday line of every cached sample for day, plus min/avg/max. Because
-// watch_heart_rate_intraday is a rolling ~3-day cache (see its schema
-// comment), a day outside that window legitimately has zero rows even
-// though the daily average is still known — that's reported as a distinct,
-// clearly labeled message rather than silently showing nothing.
+// intraday line of every stored sample for day, plus min/avg/max. A day can
+// have a daily average but no samples (e.g. synced before samples were
+// stored); that's reported as a distinct, clearly labeled message rather
+// than silently showing nothing.
 func fetchHeartRateDetail(ctx context.Context, db *sql.DB, userID int64, day time.Time, today dashboardDailyRow) (*views.DetailData, error) {
 	start, end := localDayRangeUnix(day)
 	rows, err := db.QueryContext(ctx, `
@@ -591,7 +590,7 @@ func fetchHeartRateDetail(ctx context.Context, db *sql.DB, userID int64, day tim
 
 	if len(d.LineSamples) == 0 {
 		if today.HeartRateAvgBpm != nil {
-			d.Message = "Detailed heart rate is only cached for the last few days — showing the daily average only for older days."
+			d.Message = "No detailed heart-rate samples for this day — showing the daily average only."
 		} else {
 			d.Message = "No heart rate data for this day."
 		}

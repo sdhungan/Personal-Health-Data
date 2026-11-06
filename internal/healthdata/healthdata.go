@@ -142,8 +142,7 @@ type HourlySteps struct {
 }
 
 // HeartRateSample is one exact-timestamp reading — Timeline shape, mirrors
-// watch_heart_rate_intraday (a rolling cache, not permanent history — see
-// its schema comment).
+// watch_heart_rate_intraday.
 type HeartRateSample struct {
 	RecordedAt time.Time
 	Bpm        float64

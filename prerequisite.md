@@ -228,11 +228,12 @@ for a nested (non-root) `data-signals`, so don't assume they do.
   `googleauth.LoadToken` + a plain (non-persisting) `cfg.TokenSource` and
   calls `googlehealth.DumpToday` into a scratch dir — no DB, and no risk of
   rewriting `google_oauth.json.enc` under the running service.
-- `watch_heart_rate_intraday` is a **rolling cache**, not permanent history —
-  its own schema comment says so, and it's true in practice (confirmed only
-  ~3 days of samples present in the live dev DB). Any UI that reads it must
-  handle "no data because it aged out of the cache" as a distinct, clearly
-  labeled state — don't conflate that with "the watch recorded nothing."
+- `watch_heart_rate_intraday` is **full history** (nothing prunes it; it
+  used to be documented as a "rolling ~3-day cache"; corrected 2026-11-06).
+  It's ~14k rows/day and by far the
+  biggest table, hence its compact shape (Unix-second INTEGER timestamps,
+  WITHOUT ROWID). A day can still have a daily average but no samples;
+  UI that reads it shows that as a distinct, labeled state.
 - Every DB read/write in `internal/web` goes through plain `database/sql`
   against `*sql.DB` (no ORM); the pattern for a new feature needing DB access
   is a small package-level file like `journal.go`/`bodymeasurement.go`/

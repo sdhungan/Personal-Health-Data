@@ -580,9 +580,7 @@ func (s *DBSyncer) syncStepsHourly(ctx context.Context, day time.Time) (bool, er
 }
 
 // syncHeartRateIntraday fetches the day's raw heart-rate samples once,
-// caches them into watch_heart_rate_intraday (a rolling cache, not the
-// source of truth for history — see the table's comment in
-// internal/db/schema.sql), and returns the day's min/avg/max for
+// stores them into watch_heart_rate_intraday, and returns the day's min/avg/max for
 // watch_daily_summary — computed from this same fetch rather than a
 // second API call.
 func (s *DBSyncer) syncHeartRateIntraday(ctx context.Context, day time.Time) (found bool, min, max, avg *float64, err error) {
