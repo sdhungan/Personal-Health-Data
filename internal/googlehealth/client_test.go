@@ -4,9 +4,12 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 // sequenceTransport returns each response in order on successive
@@ -90,4 +93,11 @@ func TestClientDoesNotRetryOnOtherErrors(t *testing.T) {
 	if transport.calls != 1 {
 		t.Errorf("calls = %d, want 1 (only 429/503 trigger the retry loop)", transport.calls)
 	}
+}
+
+// TestMain lifts the request pacing: the sync tests make dozens of calls
+// against a fake transport and shouldn't wait out a real quota.
+func TestMain(m *testing.M) {
+	requestRate = rate.Inf
+	os.Exit(m.Run())
 }

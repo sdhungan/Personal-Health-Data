@@ -17,6 +17,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 // BaseURL is the Google Health API's REST base.
@@ -25,10 +27,20 @@ const BaseURL = "https://health.googleapis.com/v4"
 // Client is a minimal wrapper around an already-authenticated *http.Client
 // (see internal/googleauth.HTTPClient).
 type Client struct {
-	HTTP *http.Client
+	HTTP    *http.Client
+	limiter *rate.Limiter
 }
 
-func NewClient(hc *http.Client) *Client { return &Client{HTTP: hc} }
+// requestRate paces every request a Client makes. Google's quota is 300
+// requests per minute per user (see maxRateLimitRetries); a backfill fires
+// ~45 per day, many concurrently, day after day, and outran it: retries
+// alone just piled back in. 4/s = 240/min leaves headroom for another
+// process (scheduler, CLI) syncing the same user. A var so tests can lift it.
+var requestRate = rate.Limit(4)
+
+func NewClient(hc *http.Client) *Client {
+	return &Client{HTTP: hc, limiter: rate.NewLimiter(requestRate, 4)}
+}
 
 // APIError carries a non-2xx response body verbatim — for the exploratory
 // dump, a documented error from Google (wrong filter syntax, missing scope,
@@ -127,6 +139,11 @@ func (c *Client) do(ctx context.Context, method, u string, body io.Reader) (json
 	}
 
 	for attempt := 0; ; attempt++ {
+		if c.limiter != nil {
+			if err := c.limiter.Wait(ctx); err != nil {
+				return nil, err
+			}
+		}
 		var reqBody io.Reader
 		if bodyBytes != nil {
 			reqBody = bytes.NewReader(bodyBytes)
