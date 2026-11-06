@@ -45,7 +45,7 @@ func withFastRetries(t *testing.T) {
 
 func TestClientRetriesOn429ThenSucceeds(t *testing.T) {
 	withFastRetries(t)
-	transport := &sequenceTransport{statuses: []int{http.StatusTooManyRequests, http.StatusTooManyRequests, http.StatusOK}}
+	transport := &sequenceTransport{statuses: []int{http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusOK}}
 	client := NewClient(&http.Client{Transport: transport})
 
 	_, err := client.ListDataPoints(context.Background(), "steps", "", 10)
@@ -53,7 +53,7 @@ func TestClientRetriesOn429ThenSucceeds(t *testing.T) {
 		t.Fatalf("ListDataPoints: expected eventual success, got: %v", err)
 	}
 	if transport.calls != 3 {
-		t.Errorf("calls = %d, want 3 (two 429s then a success)", transport.calls)
+		t.Errorf("calls = %d, want 3 (a 429 and a 503, then a success)", transport.calls)
 	}
 }
 
@@ -88,6 +88,6 @@ func TestClientDoesNotRetryOnOtherErrors(t *testing.T) {
 		t.Fatal("ListDataPoints: expected an error, got nil")
 	}
 	if transport.calls != 1 {
-		t.Errorf("calls = %d, want 1 (a non-429 error must not trigger the rate-limit retry loop)", transport.calls)
+		t.Errorf("calls = %d, want 1 (only 429/503 trigger the retry loop)", transport.calls)
 	}
 }

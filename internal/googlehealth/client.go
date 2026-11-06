@@ -98,7 +98,7 @@ func (c *Client) DailyRollUp(ctx context.Context, dataType string, start, end Ci
 }
 
 // maxRateLimitRetries/rateLimitBaseDelay bound how long do() waits out a
-// 429 (RESOURCE_EXHAUSTED) before giving up and returning the error to the
+// 429 (RESOURCE_EXHAUSTED) or 503 (UNAVAILABLE) before giving up and returning the error to the
 // caller. Google Health's quota here is "requests per minute per user"
 // (300/min at the time of writing — see a real 429 body's
 // metadata.quota_limit_value), so a handful of exponentially-backed-off
@@ -150,7 +150,10 @@ func (c *Client) do(ctx context.Context, method, u string, body io.Reader) (json
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
+			// 503 UNAVAILABLE is transient too (seen mid-backfill twice on
+			// 2026-11-06); failing on it aborted the whole sync pass.
+			retryable := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable
+			if retryable && attempt < maxRateLimitRetries {
 				base := rateLimitBaseDelay * time.Duration(1<<attempt)
 				delay := base + time.Duration(rand.Int63n(int64(base)+1)) // jitter up to +100%, avoids a thundering herd on the shared per-minute quota
 				select {
