@@ -206,9 +206,9 @@ var bodyMeasurementStatDefs = map[string]bodyMeasurementStatDef{
 // (body_fat_pct_raw) if one's ever synced, else our own Navy-method estimate
 // (body_fat_pct_calculated, written by saveBodyMeasurement).
 //
-// showAll swaps the 14-day chart for a line over every logged day the
-// account has ("Show all").
-func buildBodyMeasurementStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, kind string, day time.Time, expanded, showAll bool) (views.TileData, error) {
+// The chart covers the selected range (the last days days); showAll swaps
+// it for a line over every logged day the account has ("Show all").
+func buildBodyMeasurementStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, kind string, day time.Time, days int, expanded, showAll bool) (views.TileData, error) {
 	def := bodyMeasurementStatDefs[kind]
 	t.Kind = views.TileKindStat
 	t.Title = def.Title
@@ -230,18 +230,17 @@ func buildBodyMeasurementStatTile(ctx context.Context, db *sql.DB, userID int64,
 		return t, nil
 	}
 
-	// Always the last trendDays days, sparkline and chart alike — body
-	// measurements move slowly enough that one week shows little trend.
-	days := trendDays
-	history, err := fetchBodyMeasurementHistory(ctx, db, userID, day, def.Column, days)
+	lookback := max(days, trendDays)
+	history, err := fetchBodyMeasurementHistory(ctx, db, userID, day, def.Column, lookback)
 	if err != nil {
 		return t, err
 	}
 
 	// Measurements aren't logged daily, so a day with no value of its own
-	// still shows the most recent one in the window rather than an empty
-	// tile; only a window with nothing at all is empty.
-	for i := 0; i < days; i++ {
+	// still shows the most recent one in the window (at least trendDays,
+	// even for a shorter range) rather than an empty tile; only a window
+	// with nothing at all is empty.
+	for i := 0; i < lookback; i++ {
 		d := day.AddDate(0, 0, -i)
 		if v, ok := history[d.Format(dateLayout)]; ok {
 			t.BigValue = fmt.Sprintf("%.1f", v)
@@ -256,11 +255,20 @@ func buildBodyMeasurementStatTile(ctx context.Context, db *sql.DB, userID int64,
 		t.EmptyMsg = def.EmptyMsg
 	}
 
+	if days == 1 {
+		return t, nil
+	}
 	chart := buildBodyMeasurementChart(day, history, days)
 	if chart != nil {
 		t.SparklineValues = chart.Values
 	}
-	if expanded && chart != nil {
+	if expanded && days > maxBarDays {
+		value := func(d time.Time) (float64, bool) { v, ok := history[d.Format(dateLayout)]; return v, ok }
+		if d := trendLine(day, days, value, fmtOneDec, def.Unit); d != nil {
+			t.Detail = d
+			t.Empty = false
+		}
+	} else if expanded && chart != nil {
 		chart.Unit = def.Unit
 		for _, v := range chart.Values {
 			chart.ValueLabels = append(chart.ValueLabels, fmt.Sprintf("%.1f %s", v, def.Unit))

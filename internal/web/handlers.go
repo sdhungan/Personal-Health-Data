@@ -63,7 +63,7 @@ func dayLabel(day time.Time) string {
 	}
 }
 
-func buildDashboardData(ctx context.Context, db *sql.DB, userID int64, day time.Time, view string, cronometerConnected bool) (views.DashboardData, error) {
+func buildDashboardData(ctx context.Context, db *sql.DB, userID int64, day time.Time, rng views.TrendRange, view string, cronometerConnected bool) (views.DashboardData, error) {
 	dayStr := day.Format(dateLayout)
 	data := views.DashboardData{
 		Day:                 dayStr,
@@ -72,6 +72,7 @@ func buildDashboardData(ctx context.Context, db *sql.DB, userID int64, day time.
 		NextDay:             day.AddDate(0, 0, 1).Format(dateLayout),
 		Today:               time.Now().Format(dateLayout),
 		View:                view,
+		Range:               rng,
 		CronometerConnected: cronometerConnected,
 		MissingByCategory:   map[string][]string{},
 	}
@@ -80,7 +81,7 @@ func buildDashboardData(ctx context.Context, db *sql.DB, userID int64, day time.
 	if err != nil {
 		return data, err
 	}
-	history, err := fetchTrendRows(ctx, db, userID, day)
+	history, err := fetchTrendRows(ctx, db, userID, day, rng.Days)
 	if err != nil {
 		return data, err
 	}
@@ -97,13 +98,13 @@ func buildDashboardData(ctx context.Context, db *sql.DB, userID int64, day time.
 		t := views.TileData{ID: "tile-" + kind, Metric: kind, Expanded: expanded, Width: sizes[kind].Width, Height: sizes[kind].Height}
 		switch {
 		case kind == "activities":
-			t, err = buildActivitiesTile(ctx, db, userID, t, day, t.Expanded)
+			t, err = buildActivitiesTile(ctx, db, userID, t, day, rng.Days, t.Expanded)
 		case kind == "body":
 			t, err = buildBodyTile(ctx, db, userID, t, day)
 		case kind == "body_history":
 			t, err = buildBodyHistoryTile(ctx, db, userID, t)
 		case kind == "weight" || kind == "waist" || kind == "neck" || kind == "body_fat":
-			t, err = buildBodyMeasurementStatTile(ctx, db, userID, t, kind, day, t.Expanded, false)
+			t, err = buildBodyMeasurementStatTile(ctx, db, userID, t, kind, day, rng.Days, t.Expanded, false)
 		case kind == "hr_zones":
 			t, err = buildHeartRateZonesTile(ctx, db, userID, t, day, t.Expanded)
 		case kind == "active_minutes_by_level":
@@ -118,7 +119,7 @@ func buildDashboardData(ctx context.Context, db *sql.DB, userID int64, day time.
 			if _, ok := metricDefs[kind]; !ok {
 				continue
 			}
-			t, err = buildStatTile(ctx, db, userID, t, kind, day, t.Expanded, today, history)
+			t, err = buildStatTile(ctx, db, userID, t, kind, day, rng.Days, t.Expanded, today, history)
 		}
 		if err != nil {
 			return data, err
@@ -169,7 +170,7 @@ func (s *Server) handleIndex(c echo.Context) error {
 	day := parseDay(c)
 	userID := webauth.CurrentUserID(c)
 
-	data, err := buildDashboardData(ctx, s.DB, userID, day, "data", s.cronometerConnected(userID))
+	data, err := buildDashboardData(ctx, s.DB, userID, day, parseRange(c), "data", s.cronometerConnected(userID))
 	if err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
@@ -197,6 +198,7 @@ func (s *Server) handleView(c echo.Context) error {
 		view = "data"
 	}
 	userID := webauth.CurrentUserID(c)
+	rng := parseRange(c)
 
 	sse := datastar.NewSSE(c.Response(), c.Request())
 
@@ -237,7 +239,7 @@ func (s *Server) handleView(c echo.Context) error {
 		}
 	}
 
-	data, err := buildDashboardData(ctx, s.DB, userID, day, "data", s.cronometerConnected(userID))
+	data, err := buildDashboardData(ctx, s.DB, userID, day, rng, "data", s.cronometerConnected(userID))
 	if err != nil {
 		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
 	}
@@ -253,13 +255,14 @@ func (s *Server) handleTile(c echo.Context) error {
 		return c.String(http.StatusNotFound, "unknown tile kind")
 	}
 	ctx, userID, expanded := c.Request().Context(), webauth.CurrentUserID(c), c.QueryParam("expanded") == "true"
+	days := parseRange(c).Days
 	// Every call here is an expand/collapse click (or a body tile's range
 	// toggle, always expanded), so remember it for the next page load.
 	sse := datastar.NewSSE(c.Response(), c.Request())
 	if err := saveTileExpanded(ctx, s.DB, userID, kind, expanded); err != nil {
 		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
 	}
-	return s.patchOneTile(sse, ctx, userID, kind, day, expanded, c.QueryParam("all") == "true")
+	return s.patchOneTile(sse, ctx, userID, kind, day, days, expanded, c.QueryParam("all") == "true")
 }
 
 // handleTileMove persists a drag-and-drop reorder. The browser has already
@@ -288,9 +291,9 @@ func (s *Server) handleTileResize(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-// patchOneTile builds kind's tile for day (with its saved size) and patches
-// it in place by id.
-func (s *Server) patchOneTile(sse *datastar.ServerSentEventGenerator, ctx context.Context, userID int64, kind string, day time.Time, expanded, showAll bool) error {
+// patchOneTile builds kind's tile for day over the last days days (with its
+// saved size) and patches it in place by id.
+func (s *Server) patchOneTile(sse *datastar.ServerSentEventGenerator, ctx context.Context, userID int64, kind string, day time.Time, days int, expanded, showAll bool) error {
 	_, sizes, err := fetchTileLayout(ctx, s.DB, userID)
 	if err != nil {
 		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
@@ -298,13 +301,13 @@ func (s *Server) patchOneTile(sse *datastar.ServerSentEventGenerator, ctx contex
 	t := views.TileData{ID: "tile-" + kind, Metric: kind, Expanded: expanded, Width: sizes[kind].Width, Height: sizes[kind].Height}
 	switch {
 	case kind == "activities":
-		t, err = buildActivitiesTile(ctx, s.DB, userID, t, day, expanded)
+		t, err = buildActivitiesTile(ctx, s.DB, userID, t, day, days, expanded)
 	case kind == "body":
 		t, err = buildBodyTile(ctx, s.DB, userID, t, day)
 	case kind == "body_history":
 		t, err = buildBodyHistoryTile(ctx, s.DB, userID, t)
 	case kind == "weight" || kind == "waist" || kind == "neck" || kind == "body_fat":
-		t, err = buildBodyMeasurementStatTile(ctx, s.DB, userID, t, kind, day, expanded, showAll)
+		t, err = buildBodyMeasurementStatTile(ctx, s.DB, userID, t, kind, day, days, expanded, showAll)
 	// hr_zones was missing from this switch even before this pass (found
 	// and flagged as an out-of-scope bug earlier this session) — fixed here
 	// since active_minutes_by_level/active_zone_minutes_by_zone/
@@ -325,12 +328,12 @@ func (s *Server) patchOneTile(sse *datastar.ServerSentEventGenerator, ctx contex
 			err = ferr
 			break
 		}
-		history, ferr := fetchTrendRows(ctx, s.DB, userID, day)
+		history, ferr := fetchTrendRows(ctx, s.DB, userID, day, days)
 		if ferr != nil {
 			err = ferr
 			break
 		}
-		t, err = buildStatTile(ctx, s.DB, userID, t, kind, day, expanded, today, history)
+		t, err = buildStatTile(ctx, s.DB, userID, t, kind, day, days, expanded, today, history)
 	}
 	if err != nil {
 		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
@@ -515,6 +518,7 @@ func (s *Server) handleForceSync(c echo.Context) error {
 		view = "data"
 	}
 	userID := webauth.CurrentUserID(c)
+	rng := parseRange(c)
 
 	sse := datastar.NewSSE(c.Response(), c.Request())
 
@@ -549,7 +553,7 @@ func (s *Server) handleForceSync(c echo.Context) error {
 			}
 			return sse.PatchElementTempl(views.ErrorFragment("force sync failed: " + res.err.Error()))
 		}
-		return s.patchCurrentView(sse, context.Background(), userID, day, dayStr, view)
+		return s.patchCurrentView(sse, context.Background(), userID, day, dayStr, rng, view)
 	case <-reqCtx.Done():
 		// The client disconnected/navigated away — the goroutine above
 		// keeps running against context.Background() and will finish the
@@ -562,7 +566,7 @@ func (s *Server) handleForceSync(c echo.Context) error {
 // patchCurrentView re-renders and patches the data or journal view for
 // day — the "reload the page on the day the sync happened on" behavior
 // once a force-sync completes.
-func (s *Server) patchCurrentView(sse *datastar.ServerSentEventGenerator, ctx context.Context, userID int64, day time.Time, dayStr, view string) error {
+func (s *Server) patchCurrentView(sse *datastar.ServerSentEventGenerator, ctx context.Context, userID int64, day time.Time, dayStr string, rng views.TrendRange, view string) error {
 	if view == "journal" {
 		j, err := fetchJournal(ctx, s.DB, userID, dayStr)
 		if err != nil {
@@ -577,7 +581,7 @@ func (s *Server) patchCurrentView(sse *datastar.ServerSentEventGenerator, ctx co
 		return sse.PatchElementTempl(views.JournalViewBody(data, j))
 	}
 
-	data, err := buildDashboardData(ctx, s.DB, userID, day, "data", s.cronometerConnected(userID))
+	data, err := buildDashboardData(ctx, s.DB, userID, day, rng, "data", s.cronometerConnected(userID))
 	if err != nil {
 		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
 	}
@@ -715,6 +719,7 @@ func (s *Server) handleBodyMeasurementSave(c echo.Context) error {
 		day = time.Now().Format(dateLayout)
 	}
 	userID := webauth.CurrentUserID(c)
+	days := parseRange(c).Days
 
 	// Datastar sends a number-input's bound signal as a bare JSON number
 	// (e.g. 82.5) when it has a value, but as an empty string once the
@@ -738,7 +743,7 @@ func (s *Server) handleBodyMeasurementSave(c echo.Context) error {
 	if err := saveBodyMeasurement(ctx, s.DB, userID, day, weight, waist, neck); err != nil {
 		return sse.PatchElementTempl(views.ErrorFragment(err.Error()))
 	}
-	return s.patchBodyTile(sse, ctx, userID, day, "Saved "+time.Now().Format("15:04:05"))
+	return s.patchBodyTile(sse, ctx, userID, day, days, "Saved "+time.Now().Format("15:04:05"))
 }
 
 // bodyDerivedTileKinds are every read-only stat tile whose value comes from
@@ -755,7 +760,7 @@ var bodyDerivedTileKinds = []string{"weight", "waist", "neck", "body_fat"}
 // exist in the DOM and silently no-ops; it only reappears on the next full
 // view load. Not worth restructuring this handler's per-tile patches into a
 // full buildDashboardData rebuild just for that one-time transition.
-func (s *Server) patchBodyTile(sse *datastar.ServerSentEventGenerator, ctx context.Context, userID int64, day, savedAt string) error {
+func (s *Server) patchBodyTile(sse *datastar.ServerSentEventGenerator, ctx context.Context, userID int64, day string, days int, savedAt string) error {
 	dayTime, err := time.ParseInLocation(dateLayout, day, time.Local)
 	if err != nil {
 		dayTime = time.Now()
@@ -773,7 +778,7 @@ func (s *Server) patchBodyTile(sse *datastar.ServerSentEventGenerator, ctx conte
 	}
 
 	for _, kind := range bodyDerivedTileKinds {
-		if err := s.patchOneTile(sse, ctx, userID, kind, dayTime, true, false); err != nil {
+		if err := s.patchOneTile(sse, ctx, userID, kind, dayTime, days, true, false); err != nil {
 			return err
 		}
 	}

@@ -5,8 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
+
+	"github.com/labstack/echo/v4"
 
 	"github.com/sdhungan/Personal-Health-Data/internal/healthdata"
 	"github.com/sdhungan/Personal-Health-Data/internal/web/views"
@@ -84,18 +87,44 @@ func fetchDailySummaryRow(ctx context.Context, db *sql.DB, userID int64, day str
 	return r, nil
 }
 
-// trendDays is how many days every trend chart/sparkline covers, ending on
-// the selected day — two weeks shows a trend better than one.
+// trendDays is the default range (see parseRange) — two weeks shows a trend
+// better than one.
 const trendDays = 14
+
+// maxBarDays is the longest range drawn as one bar per day; past it, bars
+// get too thin to read, so trends become a line over every day with data
+// (see trendLine).
+const maxBarDays = 31
+
+const rangeCookie = "healthd-range"
+
+// parseRange returns the range selector's choice: a valid ?range= (sent by
+// RangeNav, and remembered in a per-browser cookie like the theme — it's
+// cosmetic, not account data), else that cookie, else trendDays. Must run
+// before the response is started, since it may set a header.
+func parseRange(c echo.Context) views.TrendRange {
+	key := c.QueryParam("range")
+	if key != "" {
+		c.SetCookie(&http.Cookie{Name: rangeCookie, Value: key, Path: "/", MaxAge: 365 * 24 * 3600, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	} else if ck, err := c.Cookie(rangeCookie); err == nil {
+		key = ck.Value
+	}
+	for _, r := range views.TrendRanges {
+		if r.Key == key {
+			return r
+		}
+	}
+	return views.TrendRange{Key: "2W", Days: trendDays}
+}
 
 // trendLabel is a trend chart's x-axis label for d: weekday names would
 // repeat past one week, so the date instead.
 func trendLabel(d time.Time) string { return d.Format("Jan 2") }
 
-// fetchTrendRows returns a day->row map for the trendDays days ending on endDay
+// fetchTrendRows returns a day->row map for the days ending on endDay
 // (inclusive), missing days simply absent from the map.
-func fetchTrendRows(ctx context.Context, db *sql.DB, userID int64, endDay time.Time) (map[string]dashboardDailyRow, error) {
-	start := endDay.AddDate(0, 0, -(trendDays - 1)).Format(dateLayout)
+func fetchTrendRows(ctx context.Context, db *sql.DB, userID int64, endDay time.Time, days int) (map[string]dashboardDailyRow, error) {
+	start := endDay.AddDate(0, 0, -(days - 1)).Format(dateLayout)
 	end := endDay.Format(dateLayout)
 
 	rows, err := db.QueryContext(ctx, `SELECT day, `+dailySummaryColumns+` FROM watch_daily_summary WHERE user_id = ? AND day BETWEEN ? AND ?`, userID, start, end)
@@ -335,14 +364,14 @@ var DefaultTileKinds = []string{
 	"nutrition_energy", "nutrition_expenditure", "nutrition_deficit", "nutrition_protein", "nutrition_carbs", "nutrition_fat", "food_log",
 }
 
-// buildStatTile builds one stat/sleep tile. Collapsed, every metric gets a
-// small 14-day (trendDays) sparkline alongside its big value (steps also gets a
-// goal-progress ring). Expanded, metrics with real finer-than-daily data
-// behind them (steps, heart rate, sleep) show that detail instead of yet
-// another daily-average chart — everything else falls back to the 14-day
-// trend, since there's genuinely nothing finer stored for it (see
-// prerequisite.md).
-func buildStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, kind string, day time.Time, expanded bool, today dashboardDailyRow, history map[string]dashboardDailyRow) (views.TileData, error) {
+// buildStatTile builds one stat/sleep tile over the last days days (the
+// range selector). Collapsed, every metric gets a small sparkline of that
+// range alongside its big value (steps also gets a goal-progress ring).
+// Expanded over a single day, metrics with real finer-than-daily data behind
+// them (steps, heart rate, sleep) show that detail; everything else, and
+// every metric over a longer range, shows the daily trend — bars up to
+// maxBarDays, a line past it.
+func buildStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, kind string, day time.Time, days int, expanded bool, today dashboardDailyRow, history map[string]dashboardDailyRow) (views.TileData, error) {
 	def := metricDefs[kind]
 	t.Kind = views.TileKindStat
 	if kind == "sleep" {
@@ -369,14 +398,36 @@ func buildStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileDa
 		t.RingPct = &pct
 	}
 
-	if hist := buildChart(day, history, def.Extract, nil); hist != nil {
-		t.SparklineValues = hist.Values
+	if days > 1 {
+		if hist := buildChart(day, days, history, def.Extract, nil); hist != nil {
+			t.SparklineValues = hist.Values
+		}
 	}
 
 	if !expanded {
 		return t, nil
 	}
 
+	if days > 1 {
+		// resting HR/HRV/heart rate read as a line at any range: day-to-day
+		// they move a few bpm, which bars anchored at 0 would flatten.
+		if days > maxBarDays || kind == "resting_hr" || kind == "hrv" || kind == "heart_rate" {
+			value := func(d time.Time) (float64, bool) { return def.Extract(history[d.Format(dateLayout)]) }
+			if d := trendLine(day, days, value, def.Format, def.Unit); d != nil {
+				t.Detail = d
+				t.Empty = false
+			}
+		} else if chart := buildChart(day, days, history, def.Extract, nil); chart != nil {
+			labelChart(chart, def)
+			t.Chart = chart
+			t.BigValue = def.Format(chart.Average)
+			t.ChartSubtext = fmt.Sprintf("%d-day average: %s", days, withUnit(t.BigValue, def.Unit))
+			t.Empty = false
+		}
+		return t, nil
+	}
+
+	// A single day: the detail behind the day's number, where there is any.
 	switch kind {
 	case "steps":
 		hourly, err := fetchStepsHourly(ctx, db, userID, day)
@@ -409,33 +460,29 @@ func buildStatTile(ctx context.Context, db *sql.DB, userID int64, t views.TileDa
 		if len(detail.StageRows) > 0 {
 			t.Empty = false
 		}
-	case "resting_hr", "hrv":
-		// trendDays line over only the days with data — a missing day plotted
-		// as 0 would drag the dynamic y-axis floor down with it.
-		d := &views.DetailData{Kind: "line", LineUnit: def.Unit}
-		var total float64
-		for i := trendDays - 1; i >= 0; i-- {
-			dd := day.AddDate(0, 0, -i)
-			if v, ok := def.Extract(history[dd.Format(dateLayout)]); ok {
-				d.LineSamples = append(d.LineSamples, views.HRSample{TimeLabel: trendLabel(dd), Bpm: v})
-				total += v
-			}
-		}
-		if n := len(d.LineSamples); n > 0 {
-			d.Stats = []views.StatItem{{Label: fmt.Sprintf("%d-day average", trendDays), Value: def.Format(total / float64(n))}}
-			t.Detail = d
-			t.Empty = false
-		}
-	default:
-		if chart := buildChart(day, history, def.Extract, nil); chart != nil {
-			labelChart(chart, def)
-			t.Chart = chart
-			t.BigValue = def.Format(chart.Average)
-			t.ChartSubtext = fmt.Sprintf("%d-day average: %s", trendDays, withUnit(t.BigValue, def.Unit))
-			t.Empty = false
-		}
 	}
 	return t, nil
+}
+
+// trendLine plots value for each of the days ending on day that has one,
+// skipping the rest — a missing day plotted as 0 would drag the dynamic
+// y-axis floor down with it. nil when no day has a value.
+func trendLine(day time.Time, days int, value func(time.Time) (float64, bool), format func(float64) string, unit string) *views.DetailData {
+	d := &views.DetailData{Kind: "line", LineUnit: unit}
+	var total float64
+	for i := days - 1; i >= 0; i-- {
+		dd := day.AddDate(0, 0, -i)
+		if v, ok := value(dd); ok {
+			d.LineSamples = append(d.LineSamples, views.HRSample{TimeLabel: trendLabel(dd), Bpm: v, ValueLabel: withUnit(format(v), unit)})
+			total += v
+		}
+	}
+	n := len(d.LineSamples)
+	if n == 0 {
+		return nil
+	}
+	d.Stats = []views.StatItem{{Label: fmt.Sprintf("%d-day average", days), Value: withUnit(format(total/float64(n)), unit)}}
+	return d
 }
 
 // localDayRangeUTC returns the [start, end) window covering day's local
@@ -899,11 +946,11 @@ func withUnit(value, unit string) string {
 	return value + " " + unit
 }
 
-func buildChart(day time.Time, history map[string]dashboardDailyRow, extract func(dashboardDailyRow) (float64, bool), goal *float64) *views.ChartData {
+func buildChart(day time.Time, days int, history map[string]dashboardDailyRow, extract func(dashboardDailyRow) (float64, bool), goal *float64) *views.ChartData {
 	c := &views.ChartData{Goal: goal}
 	var total float64
 	any := false
-	for i := trendDays - 1; i >= 0; i-- {
+	for i := days - 1; i >= 0; i-- {
 		d := day.AddDate(0, 0, -i)
 		v, ok := extract(history[d.Format(dateLayout)])
 		if ok {
@@ -917,11 +964,13 @@ func buildChart(day time.Time, history map[string]dashboardDailyRow, extract fun
 		return nil
 	}
 	c.Total = total
-	c.Average = total / trendDays
+	c.Average = total / float64(days)
 	return c
 }
 
-func buildActivitiesTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, day time.Time, expanded bool) (views.TileData, error) {
+// buildActivitiesTile lists day's activities collapsed, or the whole
+// selected range's (the last days days) expanded.
+func buildActivitiesTile(ctx context.Context, db *sql.DB, userID int64, t views.TileData, day time.Time, days int, expanded bool) (views.TileData, error) {
 	t.Kind = views.TileKindActivities
 	t.Title = "Activities"
 	t.Icon = "activity"
@@ -929,7 +978,7 @@ func buildActivitiesTile(ctx context.Context, db *sql.DB, userID int64, t views.
 
 	rangeStart := day
 	if expanded {
-		rangeStart = day.AddDate(0, 0, -6)
+		rangeStart = day.AddDate(0, 0, -(days - 1))
 	}
 
 	rows, err := db.QueryContext(ctx, `

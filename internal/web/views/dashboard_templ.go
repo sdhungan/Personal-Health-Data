@@ -528,7 +528,7 @@ func Tile(t TileData, day string) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			if t.ShowAll {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, "Last 14 days")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, "Selected range")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

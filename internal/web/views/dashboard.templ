@@ -211,7 +211,7 @@ templ Tile(t TileData, day string) {
 					// Always expanded: a range toggle instead of collapse.
 					<button class="tile-range-btn" data-on:click={ getExpr(bodyRangeURL(t.Metric, day, !t.ShowAll)) }>
 						if t.ShowAll {
-							Last 14 days
+							Selected range
 						} else {
 							Show all
 						}

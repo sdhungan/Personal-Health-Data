@@ -13,8 +13,9 @@ type DashboardData struct {
 	DayLabel string // "Today", "Yesterday", or a formatted date
 	PrevDay  string
 	NextDay  string
-	Today    string // "YYYY-MM-DD" for the real current day — lets DayNav's "Today" button jump straight there regardless of which day is selected, distinct from Day (the day being viewed)
-	View     string // "data" or "journal" — which tab is active
+	Today    string     // "YYYY-MM-DD" for the real current day — lets DayNav's "Today" button jump straight there regardless of which day is selected, distinct from Day (the day being viewed)
+	View     string     // "data" or "journal" — which tab is active
+	Range    TrendRange // the range selector's choice; zero (no selector shown) outside the data view
 	Tiles    []TileData
 
 	// MissingByCategory lists, per dashboard section, the titles of tiles
@@ -37,6 +38,16 @@ type DashboardData struct {
 	CronometerConnected bool
 	CronometerMessage   string
 }
+
+// TrendRange is one choice of the range selector (see RangeNav): how many
+// days every trend chart and sparkline covers, ending on the selected day.
+// Key is both its button label and its ?range= value.
+type TrendRange struct {
+	Key  string
+	Days int
+}
+
+var TrendRanges = []TrendRange{{"1D", 1}, {"3D", 3}, {"1W", 7}, {"2W", 14}, {"1M", 30}, {"3M", 91}, {"6M", 182}, {"1Y", 365}}
 
 // GoogleBulkSyncStatus drives the "Bulk sync" section of
 // GoogleClientSettingsPage. HasHistory selects which form is shown: a
