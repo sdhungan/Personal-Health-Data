@@ -32,20 +32,18 @@ changes it.
 - [x] Dry run on a copy of the live DB: 1,346,528 rows before/after, all
       INTEGER, 0 rows differing from the original string; ~7 s;
       220 MB -> 136 MB after VACUUM
-- [ ] Deploy (needs an elevated shell); binary built at `bin/healthd.exe`
-      from 0815e5a. Migration 10 runs by itself when the new binary opens
-      the DB. Stop, refresh the backup so it's the exact pre-migration
-      state, swap the binary, start:
-      ```powershell
-      Stop-Service healthDSafal; Get-Process healthd -ErrorAction SilentlyContinue | Wait-Process -Timeout 30; Copy-Item G:\HealthService\db\health.db.enc G:\HealthService\db\health.db.enc.bak-before-hr-int-timestamps-20261106 -Force; Copy-Item G:\HealthService\bin\healthd.exe G:\HealthService\bin\healthd.exe.bak -Force; Copy-Item G:\Repos\Personal-Health-Data\bin\healthd.exe G:\HealthService\bin\healthd.exe -Force; Start-Service healthDSafal; Start-Sleep 5; Get-Service healthDSafal; Get-Content G:\HealthService\logs\healthd.log -Tail 5
-      ```
-      Then verify on a COPY of `G:\HealthService\db\.health.db.work`
-      (plaintext while the service runs — delete the copy afterwards):
-      `PRAGMA user_version` = 10, 1,346,528+ rows in
-      `watch_heart_rate_intraday`, `typeof(recorded_at)` all 'integer'.
-      Then push the unpushed commits on `main`.
-- [ ] Verify live: service running, log shows no migration error, 1D
-      heart-rate tile and an activity's heart-rate chart still render
+- [x] Deployed 2026-11-06 23:00 (0815e5a binary). Backup refreshed after
+      stop, hash-matched the pre-migration DB; previous binary kept as
+      `G:\HealthService\bin\healthd.exe.bak`. Verified on a copy of the
+      live `.health.db.work` (copy deleted after): quick_check ok,
+      `user_version` 10, 1,347,634 rows (all `integer`, 2026-08-05 to
+      today), schema `recorded_at INTEGER`
+- [x] Verified live: service running, migration + first sync pass logged
+      ok, no errors; 1D heart-rate tile and the Running activity's
+      heart-rate chart render
+- [ ] Note: right after the rebuild the live working file was 309 MB
+      (+140 MB WAL), up from 220 MB — old table's pages are now free
+      pages. Makes the VACUUM question below more pressing
 - [ ] **REVIEW (user):** confirm all is fine, then delete the backup
 - [ ] The file won't shrink by itself: nothing in healthd runs `VACUUM`,
       so the ~85 MB freed stays as free pages (reused by new data). One-off
