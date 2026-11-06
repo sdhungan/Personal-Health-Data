@@ -218,8 +218,9 @@ type ActivityDetail struct {
 }
 
 type HRSample struct {
-	TimeLabel string
-	Bpm       float64
+	TimeLabel  string
+	Bpm        float64
+	ValueLabel string // tooltip text; empty means the bare number plus the chart's unit
 }
 
 // ServingSummary is one row in the food-log tile — a single

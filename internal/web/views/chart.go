@@ -193,6 +193,10 @@ func renderLineChartSVG(samples []HRSample, id, unit string) string {
 	// neighbours, as the hover target — easier to hit than the thin line,
 	// and unlike a circle it doesn't distort when the plot stretches.
 	for i, s := range samples {
+		value := s.ValueLabel
+		if value == "" {
+			value = formatAxisNumber(s.Bpm) + " " + unit
+		}
 		left, right := 0.0, 100.0
 		if i > 0 {
 			left = (x(i-1) + x(i)) / 2
@@ -201,7 +205,7 @@ func renderLineChartSVG(samples []HRSample, id, unit string) string {
 			right = (x(i) + x(i+1)) / 2
 		}
 		fmt.Fprintf(&b, `<rect x="%.2f" y="0" width="%.2f" height="100" class="chart-hit-target" %s/>`,
-			left, right-left, hoverAttrs(id, x(i), y(s.Bpm), s.TimeLabel, formatAxisNumber(s.Bpm)+" "+unit))
+			left, right-left, hoverAttrs(id, x(i), y(s.Bpm), s.TimeLabel, value))
 	}
 	b.WriteString(`</svg>`)
 
