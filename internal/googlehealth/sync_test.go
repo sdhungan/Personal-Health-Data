@@ -103,12 +103,12 @@ func testDataResponses() map[string]string {
 			"interval":{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T11:00:00Z"},
 			"activeMinutesByActivityLevel":[{"activityLevel":"MODERATE","activeMinutes":"20"},{"activityLevel":"VIGOROUS","activeMinutes":"10"}]
 		}}]}`,
-		"rollup:floors":             `{"rollupDataPoints":[{"civilStartTime":{"date":{"year":2026,"month":7,"day":30}},"civilEndTime":{"date":{"year":2026,"month":7,"day":31}},"floors":{"countSum":"8"}}]}`,
-		"list:altitude":             `{"dataPoints":[{"dataSource":{},"altitude":{"interval":{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T11:00:00Z"},"gainMillimeters":"12000"}}]}`,
-		"list:sedentary-period":     `{"dataPoints":[{"dataSource":{},"sedentaryPeriod":{"interval":{"startTime":"2026-07-30T14:00:00Z","endTime":"2026-07-30T15:30:00Z"}}}]}`,
-		"list:active-energy-burned": `{"dataPoints":[{"dataSource":{},"activeEnergyBurned":{"interval":{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T11:00:00Z"},"kcal":210.5}}]}`,
-		"list:vo2-max":              `{"dataPoints":[{"dataSource":{},"vo2Max":{"sampleTime":{"physicalTime":"2026-07-30T12:00:00Z"},"vo2MaxMillilitersPerKilogramPerMinute":41.2}}]}`,
-		"list:run-vo2-max":          `{"dataPoints":[{"dataSource":{},"runVo2Max":{"sampleTime":{"physicalTime":"2026-07-30T12:00:00Z"},"mlPerKgPerMin":42.8}}]}`,
+		"rollup:floors":               `{"rollupDataPoints":[{"civilStartTime":{"date":{"year":2026,"month":7,"day":30}},"civilEndTime":{"date":{"year":2026,"month":7,"day":31}},"floors":{"countSum":"8"}}]}`,
+		"list:altitude":               `{"dataPoints":[{"dataSource":{},"altitude":{"interval":{"startTime":"2026-07-30T10:00:00Z","endTime":"2026-07-30T11:00:00Z"},"gainMillimeters":"12000"}}]}`,
+		"list:sedentary-period":       `{"dataPoints":[{"dataSource":{},"sedentaryPeriod":{"interval":{"startTime":"2026-07-30T14:00:00Z","endTime":"2026-07-30T15:30:00Z"}}}]}`,
+		"rollup:active-energy-burned": `{"rollupDataPoints":[{"civilStartTime":{"date":{"year":2026,"month":7,"day":30}},"civilEndTime":{"date":{"year":2026,"month":7,"day":31}},"activeEnergyBurned":{"kcalSum":210.5}}]}`,
+		"list:vo2-max":                `{"dataPoints":[{"dataSource":{},"vo2Max":{"sampleTime":{"physicalTime":"2026-07-30T12:00:00Z"},"vo2MaxMillilitersPerKilogramPerMinute":41.2}}]}`,
+		"list:run-vo2-max":            `{"dataPoints":[{"dataSource":{},"runVo2Max":{"sampleTime":{"physicalTime":"2026-07-30T12:00:00Z"},"mlPerKgPerMin":42.8}}]}`,
 		"list:daily-heart-rate-zones": `{"dataPoints":[{"dataSource":{},"dailyHeartRateZones":{
 			"date":{"year":2026,"month":7,"day":30},
 			"heartRateZones":[{"heartRateZoneType":"LIGHT","minBeatsPerMinute":"30","maxBeatsPerMinute":"120"}]

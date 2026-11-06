@@ -198,31 +198,32 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 	// per-type logic this function always had, so a day's computed
 	// totals are unchanged, only how long they take to get here.
 	var (
-		restingHR      DailyRestingHeartRate
-		restingHRFound bool
-		hrv            DailyHeartRateVariability
-		hrvFound       bool
-		spo2           DailyOxygenSaturation
-		spo2Found      bool
-		respRate       DailyRespiratoryRate
-		respRateFound  bool
-		vo2Daily       DailyVo2Max
-		vo2DailyFound  bool
-		sleepTemp      DailySleepTemperatureDerivations
-		sleepTempFound bool
-		totalCal       TotalCaloriesRollup
-		totalCalFound  bool
-		floors         FloorsRollup
-		floorsFound    bool
-		steps          []SourcedValue[Steps]
-		distance       DistanceRollup
-		distanceFound  bool
-		altitude       []Altitude
-		sedentary      []SedentaryPeriod
-		activeEnergy   []ActiveEnergyBurned
-		vo2Sample      []Vo2Max
-		runVo2Sample   []RunVo2Max
-		sleeps         []Sleep
+		restingHR         DailyRestingHeartRate
+		restingHRFound    bool
+		hrv               DailyHeartRateVariability
+		hrvFound          bool
+		spo2              DailyOxygenSaturation
+		spo2Found         bool
+		respRate          DailyRespiratoryRate
+		respRateFound     bool
+		vo2Daily          DailyVo2Max
+		vo2DailyFound     bool
+		sleepTemp         DailySleepTemperatureDerivations
+		sleepTempFound    bool
+		totalCal          TotalCaloriesRollup
+		totalCalFound     bool
+		floors            FloorsRollup
+		floorsFound       bool
+		steps             []SourcedValue[Steps]
+		distance          DistanceRollup
+		distanceFound     bool
+		altitude          []Altitude
+		sedentary         []SedentaryPeriod
+		activeEnergy      ActiveEnergyBurnedRollup
+		activeEnergyFound bool
+		vo2Sample         []Vo2Max
+		runVo2Sample      []RunVo2Max
+		sleeps            []Sleep
 	)
 
 	g, gctx := errgroup.WithContext(ctx)
@@ -275,6 +276,13 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 		distance, distanceFound, err = fetchDailyRollup[DistanceRollup](gctx, s.Client, "distance", day)
 		return err
 	})
+	// active energy: rollup too. list() returns both the watch's per-minute
+	// points and the phone's overlapping sub-minute ones, so summing it
+	// double-counted (e.g. 2026-11-05: 712.6 kcal summed vs 443.2 rollup).
+	g.Go(func() (err error) {
+		activeEnergy, activeEnergyFound, err = fetchDailyRollup[ActiveEnergyBurnedRollup](gctx, s.Client, "active-energy-burned", day)
+		return err
+	})
 
 	// ---- Interval types, filtered server-side to this day ----
 	g.Go(func() (err error) {
@@ -287,10 +295,6 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 	})
 	g.Go(func() (err error) {
 		sedentary, err = fetchIntervalPoints[SedentaryPeriod](gctx, s.Client, "sedentary-period", day)
-		return err
-	})
-	g.Go(func() (err error) {
-		activeEnergy, err = fetchIntervalPoints[ActiveEnergyBurned](gctx, s.Client, "active-energy-burned", day)
 		return err
 	})
 
@@ -391,12 +395,9 @@ func (s *DBSyncer) fetchDailySummary(ctx context.Context, day time.Time) (health
 		out.SedentaryMinutes = &totalMinutes
 		hasData = true
 	}
-	if len(activeEnergy) > 0 {
-		var total float64
-		for _, p := range activeEnergy {
-			total += float64(p.Kcal)
-		}
-		out.ActiveEnergyBurnedKcal = &total
+	if activeEnergyFound {
+		kcal := float64(activeEnergy.KcalSum)
+		out.ActiveEnergyBurnedKcal = &kcal
 		hasData = true
 	}
 	if len(vo2Sample) > 0 {

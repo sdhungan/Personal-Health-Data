@@ -213,11 +213,6 @@ type ActivityLevel struct {
 	ActivityLevelType string                  `json:"activityLevelType"` // SEDENTARY, LIGHTLY_ACTIVE, MODERATELY_ACTIVE, VERY_ACTIVE
 }
 
-type ActiveEnergyBurned struct {
-	Interval ObservationTimeInterval `json:"interval"`
-	Kcal     PBFloat64               `json:"kcal"`
-}
-
 type TimeInHeartRateZone struct {
 	Interval       ObservationTimeInterval `json:"interval"`
 	HeartRateZone  string                  `json:"heartRateZone"`
