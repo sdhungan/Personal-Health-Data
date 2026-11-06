@@ -216,7 +216,9 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-wrap: wrap;
   width: fit-content;
+  max-width: 100%;
   margin-bottom: 20px;
   background: var(--tile-bg);
   border: 1px solid var(--border);
@@ -291,6 +293,21 @@ body {
   white-space: nowrap;
 }
 .day-nav-today-btn:hover { color: var(--text); background: var(--tile-bg-hover); }
+
+.range-nav { display: flex; flex-wrap: wrap; gap: 2px; margin-left: 4px; }
+.range-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  padding: 6px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+.range-btn:hover { color: var(--text); background: var(--tile-bg-hover); }
+.range-btn.active { color: var(--text); border-color: var(--border); background: var(--tile-bg-hover); }
 
 .icon-spin { animation: spin 1s linear infinite; }
 @keyframes spin {

@@ -30,6 +30,12 @@ func viewURL(day, view string) string {
 	return APIURL("view", url.Values{"day": {day}, "view": {view}})
 }
 
+// rangeURL re-renders the data view for day over range key — the server
+// remembers the choice in a cookie (see parseRange in internal/web).
+func rangeURL(day, key string) string {
+	return APIURL("view", url.Values{"day": {day}, "view": {"data"}, "range": {key}})
+}
+
 // dayPickerChangeExpr builds the date-picker input's change-handler
 // expression. Unlike the other nav URLs, the day segment can't be baked in
 // at render time — it's whatever the user just picked — so this leaves it
@@ -123,7 +129,7 @@ func getExpr(url string) string  { return "@get('" + url + "')" }
 func postExpr(url string) string { return "@post('" + url + "')" }
 
 // bodyRangeURL fetches a body measurement stat tile (always expanded) with
-// either its 14-day chart or, when all is true, every logged day.
+// either the selected range's chart or, when all is true, every logged day.
 func bodyRangeURL(kind, day string, all bool) string {
 	return APIURL("tile", url.Values{"kind": {kind}, "day": {day}, "expanded": {"true"}, "all": {fmt.Sprintf("%t", all)}})
 }

@@ -194,6 +194,18 @@ templ DayNav(data DashboardData) {
 			</button>
 		}
 		@SyncButton(data.Day, data.View, false)
+		if data.Range.Key != "" {
+			@RangeNav(data.Day, data.Range.Key)
+		}
+	</div>
+}
+
+// RangeNav picks how far back every trend chart reaches (see TrendRanges).
+templ RangeNav(day, active string) {
+	<div class="range-nav">
+		for _, r := range TrendRanges {
+			<button class={ "range-btn", templ.KV("active", r.Key == active) } data-on:click={ getExpr(rangeURL(day, r.Key)) }>{ r.Key }</button>
+		}
 	</div>
 }
 
