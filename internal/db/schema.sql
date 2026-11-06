@@ -236,9 +236,11 @@ CREATE TABLE watch_steps_hourly (
 -- by the sync job or a maintenance task. If the UI needs detailed HR for a
 -- day whose cache has been pruned, fetch it live from the Google Health
 -- API instead of treating this table as complete history.
+-- recorded_at is Unix seconds (UTC), not RFC3339 text like the other
+-- tables: at ~14k samples a day the text form was most of the row.
 CREATE TABLE watch_heart_rate_intraday (
     user_id     INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
-    recorded_at TEXT NOT NULL,
+    recorded_at INTEGER NOT NULL,
     bpm         REAL NOT NULL,
     cached_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     PRIMARY KEY (user_id, recorded_at)

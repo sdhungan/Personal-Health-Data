@@ -14,6 +14,25 @@ var Migrations = []string{
 	// The MCP connector's bearer-token table, left over from the reverted
 	// move of the connector to an HTTP route; nothing reads it.
 	`DROP TABLE IF EXISTS mcp_token`,
+
+	// watch_heart_rate_intraday.recorded_at: RFC3339 text -> INTEGER Unix
+	// seconds. Lossless: the sync only ever wrote whole seconds. A value
+	// that doesn't parse yields NULL, which the NOT NULL column rejects,
+	// failing (and rolling back) the whole migration rather than dropping
+	// the row. Values already INTEGER (a fresh schema) are kept as-is.
+	`CREATE TABLE watch_heart_rate_intraday_new (
+	    user_id     INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+	    recorded_at INTEGER NOT NULL,
+	    bpm         REAL NOT NULL,
+	    cached_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+	    PRIMARY KEY (user_id, recorded_at)
+	);
+	INSERT INTO watch_heart_rate_intraday_new (user_id, recorded_at, bpm, cached_at)
+	    SELECT user_id, CASE typeof(recorded_at) WHEN 'integer' THEN recorded_at ELSE CAST(strftime('%s', recorded_at) AS INTEGER) END, bpm, cached_at
+	    FROM watch_heart_rate_intraday;
+	DROP TABLE watch_heart_rate_intraday;
+	ALTER TABLE watch_heart_rate_intraday_new RENAME TO watch_heart_rate_intraday;
+	CREATE INDEX idx_watch_heart_rate_intraday_cached_at ON watch_heart_rate_intraday (cached_at);`,
 }
 
 // migrationBase is the version every database had reached when its earlier

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -251,9 +252,15 @@ func TestMigrateUpgradesFromBaselineAndRejectsOlder(t *testing.T) {
 		t.Fatalf("fresh database at version %d, want %d", v, latest)
 	}
 
-	// The live database just before this change: at the baseline, still
-	// carrying mcp_token.
-	if _, err := conn.Exec(fmt.Sprintf(`CREATE TABLE mcp_token (user_id INTEGER PRIMARY KEY); PRAGMA user_version = %d`, migrationBase)); err != nil {
+	// The live database just before these migrations: at the baseline,
+	// still carrying mcp_token and RFC3339-text heart-rate timestamps.
+	if _, err := conn.Exec(fmt.Sprintf(`CREATE TABLE mcp_token (user_id INTEGER PRIMARY KEY);
+		DROP TABLE watch_heart_rate_intraday;
+		CREATE TABLE watch_heart_rate_intraday (
+		    user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE, recorded_at TEXT NOT NULL, bpm REAL NOT NULL,
+		    cached_at TEXT NOT NULL DEFAULT (strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', 'now')), PRIMARY KEY (user_id, recorded_at));
+		INSERT INTO watch_heart_rate_intraday (user_id, recorded_at, bpm, cached_at) VALUES (1, '2026-08-05T20:02:25Z', 61, 'c');
+		PRAGMA user_version = %d`, migrationBase)); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.migrate(); err != nil {
@@ -265,6 +272,14 @@ func TestMigrateUpgradesFromBaselineAndRejectsOlder(t *testing.T) {
 	var n int
 	if err := conn.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name = 'mcp_token'`).Scan(&n); err != nil || n != 0 {
 		t.Errorf("mcp_token still present after migrate (count %d, err %v)", n, err)
+	}
+	var ts any
+	var bpm float64
+	if err := conn.QueryRow(`SELECT recorded_at, bpm FROM watch_heart_rate_intraday`).Scan(&ts, &bpm); err != nil {
+		t.Fatalf("reading migrated heart-rate row: %v", err)
+	}
+	if want := time.Date(2026, 8, 5, 20, 2, 25, 0, time.UTC).Unix(); ts != want || bpm != 61 {
+		t.Errorf("migrated heart-rate row = (%v %T, %v), want (%d int64, 61)", ts, ts, bpm, want)
 	}
 
 	if _, err := conn.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, migrationBase-1)); err != nil {

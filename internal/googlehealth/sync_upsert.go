@@ -222,7 +222,7 @@ func (s *DBSyncer) upsertHeartRateSamples(ctx context.Context, rows []healthdata
 		if _, err := s.DB.ExecContext(ctx, `
 			INSERT INTO watch_heart_rate_intraday (user_id, recorded_at, bpm, cached_at) VALUES (?, ?, ?, ?)
 			ON CONFLICT(user_id, recorded_at) DO UPDATE SET bpm = excluded.bpm, cached_at = excluded.cached_at
-		`, s.UserID, r.RecordedAt.Format(time.RFC3339), r.Bpm, now); err != nil {
+		`, s.UserID, r.RecordedAt.Unix(), r.Bpm, now); err != nil {
 			return fmt.Errorf("upserting watch_heart_rate_intraday: %w", err)
 		}
 	}

@@ -485,15 +485,13 @@ func trendLine(day time.Time, days int, value func(time.Time) (float64, bool), f
 	return d
 }
 
-// localDayRangeUTC returns the [start, end) window covering day's local
-// calendar date, formatted as UTC RFC3339 strings — the same representation
-// watch_heart_rate_intraday.recorded_at is stored in, so it can be used
-// directly in a BETWEEN-style range query.
-func localDayRangeUTC(day time.Time) (startUTC, endUTC string) {
+// localDayRangeUnix returns the [start, end) window covering day's local
+// calendar date as Unix seconds — the representation
+// watch_heart_rate_intraday.recorded_at is stored in.
+func localDayRangeUnix(day time.Time) (start, end int64) {
 	y, m, d := day.Date()
-	start := time.Date(y, m, d, 0, 0, 0, 0, time.Local)
-	end := start.AddDate(0, 0, 1)
-	return start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339)
+	s := time.Date(y, m, d, 0, 0, 0, 0, time.Local)
+	return s.Unix(), s.AddDate(0, 0, 1).Unix()
 }
 
 // fetchStepsHourly returns steps bucketed by local hour (0-23) for day, from
@@ -556,11 +554,11 @@ func hourLabel(h int) string {
 // though the daily average is still known — that's reported as a distinct,
 // clearly labeled message rather than silently showing nothing.
 func fetchHeartRateDetail(ctx context.Context, db *sql.DB, userID int64, day time.Time, today dashboardDailyRow) (*views.DetailData, error) {
-	startUTC, endUTC := localDayRangeUTC(day)
+	start, end := localDayRangeUnix(day)
 	rows, err := db.QueryContext(ctx, `
 		SELECT recorded_at, bpm FROM watch_heart_rate_intraday
 		WHERE user_id = ? AND recorded_at >= ? AND recorded_at < ? ORDER BY recorded_at
-	`, userID, startUTC, endUTC)
+	`, userID, start, end)
 	if err != nil {
 		return nil, fmt.Errorf("querying intraday heart rate for %s: %w", day.Format(dateLayout), err)
 	}
@@ -569,15 +567,12 @@ func fetchHeartRateDetail(ctx context.Context, db *sql.DB, userID int64, day tim
 	d := &views.DetailData{Kind: "line", LineUnit: "bpm"}
 	var minV, maxV, sum float64
 	for rows.Next() {
-		var ts string
+		var ts int64
 		var bpm float64
 		if err := rows.Scan(&ts, &bpm); err != nil {
 			return nil, fmt.Errorf("scanning intraday heart rate sample: %w", err)
 		}
-		label := ts
-		if t, err := time.Parse(time.RFC3339, ts); err == nil {
-			label = t.Local().Format("15:04")
-		}
+		label := time.Unix(ts, 0).Format("15:04")
 		if len(d.LineSamples) == 0 {
 			minV, maxV = bpm, bpm
 		}
@@ -1033,32 +1028,30 @@ func fetchActivityDetail(ctx context.Context, db *sql.DB, userID, id int64) (*vi
 		d.AvgHeartRateBpm = &v
 	}
 
-	if st, err := time.Parse(time.RFC3339, startTime); err == nil {
-		d.StartTimeLabel = st.Local().Format("Jan 2, 3:04 PM")
+	st, err1 := time.Parse(time.RFC3339, startTime)
+	et, err2 := time.Parse(time.RFC3339, endTime)
+	if err1 != nil || err2 != nil {
+		return &d, nil // no interval to look up heart rate for
 	}
-	if et, err := time.Parse(time.RFC3339, endTime); err == nil {
-		d.EndTimeLabel = et.Local().Format("3:04 PM")
-	}
+	d.StartTimeLabel = st.Local().Format("Jan 2, 3:04 PM")
+	d.EndTimeLabel = et.Local().Format("3:04 PM")
 
 	rows, err := db.QueryContext(ctx, `
 		SELECT recorded_at, bpm FROM watch_heart_rate_intraday
 		WHERE user_id = ? AND recorded_at BETWEEN ? AND ? ORDER BY recorded_at
-	`, userID, startTime, endTime)
+	`, userID, st.Unix(), et.Unix())
 	if err != nil {
 		return nil, fmt.Errorf("querying heart rate samples for activity %d: %w", id, err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var ts string
+		var ts int64
 		var bpm float64
 		if err := rows.Scan(&ts, &bpm); err != nil {
 			return nil, fmt.Errorf("scanning heart rate sample: %w", err)
 		}
-		label := ts
-		if t, err := time.Parse(time.RFC3339, ts); err == nil {
-			label = t.Local().Format("15:04")
-		}
+		label := time.Unix(ts, 0).Format("15:04")
 		d.HeartRateSamples = append(d.HeartRateSamples, views.HRSample{TimeLabel: label, Bpm: bpm})
 	}
 	return &d, rows.Err()
