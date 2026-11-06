@@ -310,7 +310,10 @@ CREATE INDEX idx_watch_sleep_session_user_day ON watch_sleep_session (user_id, d
 -- through sleep_session_id, same as any other child-of-a-session table.
 CREATE TABLE watch_sleep_stage (
     sleep_session_id INTEGER NOT NULL REFERENCES watch_sleep_session (id) ON DELETE CASCADE,
-    stage_type       TEXT NOT NULL CHECK (stage_type IN ('AWAKE', 'LIGHT', 'DEEP', 'REM')),
+    -- AWAKE/LIGHT/DEEP/REM for "STAGES" sessions; older/short "CLASSIC"
+    -- sessions use ASLEEP (seen live). No CHECK: one unexpected value must
+    -- not abort a whole sync pass.
+    stage_type       TEXT NOT NULL,
     start_time       TEXT NOT NULL,
     end_time         TEXT NOT NULL
 );

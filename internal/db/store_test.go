@@ -300,6 +300,10 @@ func TestMigrateUpgradesFromBaselineAndRejectsOlder(t *testing.T) {
 	if reopened != "google_health 2026-08-06" {
 		t.Errorf("re-opened days = %q, want only the Google day without sleep", reopened)
 	}
+	if _, err := conn.Exec(`INSERT INTO watch_sleep_stage (sleep_session_id, stage_type, start_time, end_time)
+		SELECT id, 'ASLEEP', 's', 'e' FROM watch_sleep_session`); err != nil {
+		t.Errorf("CLASSIC sleep stage type rejected after migrate: %v", err)
+	}
 	var free int
 	if err := conn.QueryRow(`PRAGMA freelist_count`).Scan(&free); err != nil || free != 0 {
 		t.Errorf("free pages after migrate = %d (err %v), want 0: VACUUM didn't run", free, err)

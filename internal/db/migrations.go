@@ -58,6 +58,20 @@ var Migrations = []string{
 	WHERE source = 'google_health' AND status IN ('complete', 'missing')
 	  AND NOT EXISTS (SELECT 1 FROM watch_sleep_session s
 	                  WHERE s.user_id = sync_state.user_id AND s.day = sync_state.day)`,
+
+	// watch_sleep_stage.stage_type: drop the CHECK. "CLASSIC" sleep
+	// sessions (older days, short naps) have stage type ASLEEP, which the
+	// CHECK rejected — aborting the whole sync pass at that day.
+	`CREATE TABLE watch_sleep_stage_new (
+	    sleep_session_id INTEGER NOT NULL REFERENCES watch_sleep_session (id) ON DELETE CASCADE,
+	    stage_type       TEXT NOT NULL,
+	    start_time       TEXT NOT NULL,
+	    end_time         TEXT NOT NULL
+	);
+	INSERT INTO watch_sleep_stage_new SELECT sleep_session_id, stage_type, start_time, end_time FROM watch_sleep_stage;
+	DROP TABLE watch_sleep_stage;
+	ALTER TABLE watch_sleep_stage_new RENAME TO watch_sleep_stage;
+	CREATE INDEX idx_watch_sleep_stage_session ON watch_sleep_stage (sleep_session_id);`,
 }
 
 // migrationBase is the version every database had reached when its earlier

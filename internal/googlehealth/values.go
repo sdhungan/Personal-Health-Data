@@ -152,7 +152,7 @@ type HeartRateZoneDurations struct {
 // Sleep is CONFIRMED.
 type Sleep struct {
 	Interval SessionTimeInterval `json:"interval"`
-	Type     string              `json:"type"` // e.g. "STAGES"
+	Type     string              `json:"type"` // e.g. "STAGES" or "CLASSIC"
 	Stages   []SleepStage        `json:"stages"`
 	Summary  SleepSummary        `json:"summary"`
 }
@@ -160,7 +160,7 @@ type Sleep struct {
 type SleepStage struct {
 	StartTime string `json:"startTime"`
 	EndTime   string `json:"endTime"`
-	Type      string `json:"type"` // "AWAKE", "LIGHT", "DEEP", "REM"
+	Type      string `json:"type"` // "AWAKE", "LIGHT", "DEEP", "REM"; "ASLEEP" in CLASSIC sessions (seen live)
 }
 
 type SleepSummary struct {
