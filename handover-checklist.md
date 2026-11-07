@@ -68,7 +68,39 @@ changes it.
       working file vs the backup matches the dry run (106 sleep sessions,
       94 Google days resolved, HR/sleep rows unchanged, integrity ok,
       24 MB); 2026-08-20 shows main sleep + nap on the dashboard
-- [ ] **REVIEW (user):** confirm, then delete the backup
+- [x] User confirmed; backup deleted
+
+## 3. Hourly activity, watch-only values (deploying 2026-11-07 21:17)
+
+- [x] Migration 14: `watch_steps_hourly` -> `watch_activity_hourly` with
+      active energy, altitude gain, floors, sedentary and active minutes
+      by level per local hour (rollUp, `windowSize: 3600s`); re-opens all
+      Google days for the backfill
+- [x] Rollups and daily rollups send `dataSourceFamily: google-wearables`:
+      the watch is the source of truth, no watch + phone sums
+- [x] A day's hourly rows are replaced, not merged; sedentary periods are
+      split across the hours they cover (the rollUp files a whole period
+      under its start hour)
+- [x] Client paced at 4 req/s, retries 429/503 (quota is 300/min)
+- [x] Dashboard: activity tiles chart hourly at every range; bars up to
+      1W, dotted zero-based line from 2W; per-day average over days with
+      data
+- [x] Preview (copy of live root, real API): 94 Google days complete,
+      hourly steps == daily on all of them, sedentary <= 60 min/hour,
+      integrity ok
+- [x] Deployed 6a1c6c3; backup `health.db.enc.bak-before-v14-20261107`
+      (hash-verified), previous binary `healthd.exe.bak`
+- [x] Verified live on a copy (after an unrelated PC freeze + reboot at
+      21:35; the service recovered from its working file and synced):
+      integrity ok, v14, 94 Google days complete, hourly steps == daily on
+      all of them, max 60 min/hour, 107 sleep sessions, 1.38 M HR rows
+- [x] Charts: minutes-per-hour bars fixed at 0-60 (98f7ea2); 2W+ lines
+      are one dot per day, the day's total (4ba5844)
+- [x] Shipped 98f7ea2 + 4ba5844 (UI only) 2026-11-07 21:48, via a UAC
+      prompt; clean restart, first sync pass ok (10 s).
+      `healthd.exe.bak` (pre-v14) kept as the rollback
+- [x] User confirmed 2026-11-07; backup and pre-v14 binary deleted,
+      `main` pushed
 
 ## Next (discuss with the user first)
 
@@ -76,12 +108,9 @@ changes it.
       exercise accepts no time filter): fine while there are fewer than
       ~100 sessions in range, then older days silently miss workouts. Needs
       nextPageToken pagination. Check ECG the same way
-- [ ] Hourly breakdown for calories, active energy, distance, altitude,
-      sedentary, active minutes, floors via `dataPoints:rollUp` with
-      `windowSize: 3600s` (~3 MB/year). Probe real responses first
-      (confirm-before-trusting field names)
 - [ ] The sleep stage chart has 4 lanes (AWAKE/REM/LIGHT/DEEP); a CLASSIC
       session's `ASLEEP` segments aren't drawn. Only short naps so far
-- [ ] Housekeeping in `G:\HealthService`: 15 old `healthd.exe.bak-*`
-      binaries (~24 MB each) and 2 old DB backups (~180 MB each) — ask
-      before deleting
+- [x] Housekeeping in `G:\HealthService`: old binaries and DB backups
+      deleted (user OK'd 2026-11-07)
+- [x] Throwaway probes and the preview scratch root (copies of keys)
+      deleted
